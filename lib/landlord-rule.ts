@@ -1,0 +1,60 @@
+import type { FieldValueKind, LandlordField } from "./landlord-field";
+
+/**
+ * Comparison operators available for each field value type.
+ * The rule engine evaluates these deterministically — no AI involvement.
+ */
+export const OPERATORS_BY_KIND: Record<FieldValueKind, readonly string[]> = {
+  number: ["==", "!=", ">", ">=", "<", "<="],
+  boolean: ["=="],
+  text: ["==", "!="],
+  date: ["==", "!=", ">", ">=", "<", "<="],
+  enum: ["==", "!="],
+};
+
+export const OPERATOR_LABELS: Record<string, string> = {
+  "==": "equals",
+  "!=": "not equals",
+  ">": "greater than",
+  ">=": "greater than or equal to",
+  "<": "less than",
+  "<=": "less than or equal to",
+};
+
+export type LandlordRule = {
+  /** Unique id for this rule row */
+  id: string;
+  /** References a LandlordField id */
+  fieldId: string;
+  operator: string;
+  /** Stored as string; interpreted at runtime based on field's valueKind */
+  value: string;
+};
+
+export function defaultOperatorForKind(kind: FieldValueKind): string {
+  return OPERATORS_BY_KIND[kind][0];
+}
+
+export function defaultValueForKind(kind: FieldValueKind): string {
+  if (kind === "boolean") return "true";
+  return "";
+}
+
+export function validateRule(
+  rule: LandlordRule,
+  fields: LandlordField[],
+): string | null {
+  if (!rule.fieldId) return "Select a field";
+  const field = fields.find((f) => f.id === rule.fieldId);
+  if (!field) return "Field not found";
+  const ops = OPERATORS_BY_KIND[field.valueKind];
+  if (!ops.includes(rule.operator)) return "Invalid operator for this field type";
+  if (!rule.value.trim()) return "Value is required";
+  if (field.valueKind === "number" && isNaN(Number(rule.value))) {
+    return "Value must be a number";
+  }
+  if (field.valueKind === "enum" && field.options && !field.options.includes(rule.value)) {
+    return "Value must be one of the allowed options";
+  }
+  return null;
+}

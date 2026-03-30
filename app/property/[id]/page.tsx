@@ -1,0 +1,625 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/client";
+import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions, AiExample } from "@/lib/property";
+import type { LandlordField } from "@/lib/landlord-field";
+import type { LandlordRule } from "@/lib/landlord-rule";
+import LandlordFieldsSection from "@/app/components/LandlordFieldsSection";
+import RulesSection from "@/app/components/RulesSection";
+
+const TABS = ["Questions", "Rules", "Property Info", "Messages", "Links", "AI Behavior"] as const;
+
+const DEFAULT_AI_INSTRUCTIONS: AiInstructions = { style: "", examples: [] };
+type Tab = (typeof TABS)[number];
+
+// ─── Shared-fields picker ──────────────────────────────────────────────────
+
+function SharedFieldsPicker({
+  allShared,
+  selectedIds,
+  onChange,
+}: {
+  allShared: LandlordField[];
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  if (allShared.length === 0) {
+    return (
+      <p className="text-sm text-foreground/40">
+        No shared questions yet.{" "}
+        <Link href="/shared-fields" className="text-teal-700 hover:underline">
+          Add some →
+        </Link>
+      </p>
+    );
+  }
+
+  function toggle(id: string) {
+    onChange(
+      selectedIds.includes(id)
+        ? selectedIds.filter((x) => x !== id)
+        : [...selectedIds, id],
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {allShared.map((f) => (
+        <label
+          key={f.id}
+          className="flex cursor-pointer items-center gap-3 rounded-lg border border-foreground/10 bg-white px-3 py-2.5 transition-colors hover:bg-foreground/[0.02]"
+        >
+          <input
+            type="checkbox"
+            checked={selectedIds.includes(f.id)}
+            onChange={() => toggle(f.id)}
+            className="h-4 w-4 rounded accent-teal-700"
+          />
+          <span className="flex-1 text-sm text-foreground/80">{f.label}</span>
+          <span className="text-[11px] text-foreground/35">{f.valueKind}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+// ─── Main page ─────────────────────────────────────────────────────────────
+
+export default function PropertySetupPage() {
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const supabase = createClient();
+
+  // Property state
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [propertyInfo, setPropertyInfo] = useState("");
+  const [introMessage, setIntroMessage] = useState("");
+  const [sharedFieldIds, setSharedFieldIds] = useState<string[]>([]);
+  const [ownFields, setOwnFields] = useState<LandlordField[]>([]);
+  const [rules, setRules] = useState<LandlordRule[]>([]);
+  const [links, setLinks] = useState<ListingLink[]>([]);
+  const [aiInstructions, setAiInstructions] = useState<AiInstructions>(DEFAULT_AI_INSTRUCTIONS);
+  const [status, setStatus] = useState<"draft" | "published">("draft");
+
+  // UI state
+  const [allShared, setAllShared] = useState<LandlordField[]>([]);
+  const [activeTab, setActiveTab] = useState<Tab>("Questions");
+  const [loadingPhase, setLoadingPhase] = useState<null | "fields" | "rules">(null);
+  const [generatingInfo, setGeneratingInfo] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load property + shared fields
+  useEffect(() => {
+    async function load() {
+      const [propRes, sharedRes] = await Promise.all([
+        supabase.from("properties").select("*").eq("id", id).single(),
+        supabase.from("shared_fields").select("*").order("sort_order"),
+      ]);
+
+      if (propRes.error || !propRes.data) {
+        setError("Property not found.");
+        setPageLoading(false);
+        return;
+      }
+
+      const p = propRes.data as PropertyRecord;
+      setTitle(p.title);
+      setDescription(p.description);
+      setPropertyInfo(p.property_info);
+      setIntroMessage(p.intro_message);
+      setSharedFieldIds(p.shared_field_ids ?? []);
+      setOwnFields(p.own_fields ?? []);
+      setRules(p.rules ?? []);
+      setLinks(p.links ?? []);
+      setAiInstructions(p.ai_instructions ?? DEFAULT_AI_INSTRUCTIONS);
+      setStatus(p.status);
+
+      const shared = (sharedRes.data as SharedFieldRecord[] | null) ?? [];
+      setAllShared(shared);
+      setPageLoading(false);
+    }
+    void load();
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save property to DB
+  const save = useCallback(
+    async (overrides?: Partial<PropertyRecord>) => {
+      setSaving(true);
+      const { error } = await supabase
+        .from("properties")
+        .update({
+          title: title.trim() || "New Property",
+          description: description.trim(),
+          property_info: propertyInfo,
+          intro_message: introMessage,
+          shared_field_ids: sharedFieldIds,
+          own_fields: ownFields,
+          rules,
+          links: links.filter((l) => l.label.trim() && l.url.trim()),
+          ai_instructions: aiInstructions,
+          status,
+          updated_at: new Date().toISOString(),
+          ...overrides,
+        })
+        .eq("id", id);
+      setSaving(false);
+      if (error) console.error("[save]", error);
+    },
+    [id, title, description, propertyInfo, introMessage, sharedFieldIds, ownFields, rules, links, aiInstructions, status, supabase], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  function defaultIntro() {
+    return `Thank you for your interest in ${title.trim() || "this property"}. Please answer the following questions to help us determine your eligibility.`;
+  }
+
+  // ── Two-pass generation ────────────────────────────────────────────────
+
+  async function handleGenerate() {
+    if (!description.trim()) return;
+    try {
+      setLoadingPhase("fields");
+      const fieldsRes = await fetch("/api/generate-fields", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description,
+          excludeFieldIds: sharedFieldIds,
+          excludeLabels: allShared
+            .filter((f) => sharedFieldIds.includes(f.id))
+            .map((f) => f.label),
+        }),
+      });
+      const fieldsData = (await fieldsRes.json()) as { fields?: LandlordField[] };
+      const newFields = fieldsData.fields ?? [];
+      setOwnFields(newFields);
+
+      setLoadingPhase("rules");
+      const resolvedFields = [
+        ...allShared.filter((f) => sharedFieldIds.includes(f.id)),
+        ...newFields,
+      ];
+      const rulesRes = await fetch("/api/generate-rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description, fields: resolvedFields }),
+      });
+      const rulesData = (await rulesRes.json()) as { rules?: LandlordRule[] };
+      setRules(rulesData.rules ?? []);
+    } catch (err) {
+      console.error("[generate]", err);
+    } finally {
+      setLoadingPhase(null);
+    }
+  }
+
+  // ── Property info generation ───────────────────────────────────────────
+
+  async function handleGenerateInfo() {
+    if (!description.trim()) return;
+    setGeneratingInfo(true);
+    try {
+      const res = await fetch("/api/generate-property-info", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description }),
+      });
+      const data = (await res.json()) as { propertyInfo?: string };
+      if (data.propertyInfo) setPropertyInfo(data.propertyInfo);
+    } catch (err) {
+      console.error("[generate-info]", err);
+    } finally {
+      setGeneratingInfo(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (pageLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9f8]">
+        <p className="text-sm text-foreground/50">Loading…</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f7f9f8]">
+        <p className="text-sm text-red-600">{error}</p>
+      </div>
+    );
+  }
+
+  const resolvedFieldCount = sharedFieldIds.length + ownFields.length;
+  const allResolvedFields = [
+    ...allShared.filter((f) => sharedFieldIds.includes(f.id)),
+    ...ownFields,
+  ];
+
+  return (
+    <div className="min-h-screen bg-[#f7f9f8]">
+      {/* Nav */}
+      <header className="border-b border-black/8 bg-white">
+        <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-3">
+          <Link href="/" className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-teal-800 text-white">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+                <rect x="1" y="6" width="14" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M4 6V4.5a4 4 0 0 1 8 0V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                <rect x="6.25" y="9.5" width="3.5" height="2.5" rx="0.75" fill="currentColor" />
+              </svg>
+            </div>
+            <span className="text-sm font-semibold text-[#1a2e2a]">RentScreen</span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-foreground/40">
+              {status === "published" ? "Published" : "Draft"}
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                const next = status === "draft" ? "published" : "draft";
+                setStatus(next);
+                await save({ status: next });
+              }}
+              className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                status === "published"
+                  ? "bg-teal-100 text-teal-800 hover:bg-teal-200"
+                  : "border border-black/10 text-foreground/60 hover:bg-white"
+              }`}
+            >
+              {status === "published" ? "Unpublish" : "Publish"}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-3xl space-y-8 px-6 py-10">
+        {/* Title + description */}
+        <section className="space-y-4">
+          <input
+            type="text"
+            placeholder="Property title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full rounded-lg border border-foreground/10 bg-white px-4 py-2.5 text-base font-semibold text-foreground placeholder:font-normal placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+          />
+          <div className="relative">
+            <textarea
+              rows={5}
+              placeholder="Describe your property — rent, rules, requirements, pet policy, lease length, etc."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !loadingPhase) {
+                  e.preventDefault();
+                  void handleGenerate();
+                }
+              }}
+              className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-4 py-3 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+            />
+            <button
+              type="button"
+              onClick={handleGenerate}
+              disabled={!description.trim() || loadingPhase !== null}
+              className="absolute bottom-3 right-3 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {loadingPhase === "fields"
+                ? "Generating questions…"
+                : loadingPhase === "rules"
+                  ? "Generating rules…"
+                  : "Generate"}
+            </button>
+          </div>
+        </section>
+
+        {/* Tabs */}
+        <section>
+          <div className="mb-6 flex gap-1 border-b border-foreground/8">
+            {TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`px-3 pb-3 text-sm font-medium transition-colors ${
+                  activeTab === tab
+                    ? "border-b-2 border-teal-700 text-teal-700"
+                    : "text-foreground/50 hover:text-foreground/80"
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+
+          {activeTab === "Questions" && (
+            <div className="space-y-8">
+              {/* Shared questions */}
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-medium text-foreground/80">Shared questions</h3>
+                    <p className="text-xs text-foreground/40">
+                      Included across multiple properties.{" "}
+                      <Link href="/shared-fields" className="text-teal-700 hover:underline">
+                        Manage pool →
+                      </Link>
+                    </p>
+                  </div>
+                  <span className="text-xs text-foreground/40">
+                    {sharedFieldIds.length} selected
+                  </span>
+                </div>
+                <SharedFieldsPicker
+                  allShared={allShared}
+                  selectedIds={sharedFieldIds}
+                  onChange={setSharedFieldIds}
+                />
+              </div>
+
+              <div className="border-t border-foreground/8 pt-8">
+                <div className="mb-3">
+                  <h3 className="text-sm font-medium text-foreground/80">Property-specific questions</h3>
+                  <p className="text-xs text-foreground/40">
+                    Unique to this listing. AI will not generate duplicates of shared questions.
+                  </p>
+                </div>
+                <LandlordFieldsSection fields={ownFields} onChange={setOwnFields} />
+              </div>
+            </div>
+          )}
+
+          {activeTab === "Rules" && (
+            <RulesSection
+              fields={allResolvedFields}
+              rules={rules}
+              onChange={setRules}
+            />
+          )}
+
+          {activeTab === "Property Info" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-foreground/60">
+                  Applicant-facing summary. AI-generated from your description, editable.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleGenerateInfo}
+                  disabled={!description.trim() || generatingInfo}
+                  className="shrink-0 rounded-md bg-teal-700 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                >
+                  {generatingInfo ? "Generating…" : "Generate"}
+                </button>
+              </div>
+              <textarea
+                rows={10}
+                value={propertyInfo}
+                onChange={(e) => setPropertyInfo(e.target.value)}
+                placeholder="Property info visible to applicants…"
+                className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-4 py-3 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </div>
+          )}
+
+          {activeTab === "Messages" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-foreground/60">
+                  Opening message shown before the first screening question.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIntroMessage(defaultIntro())}
+                  className="shrink-0 rounded-md border border-foreground/10 px-3 py-1.5 text-xs text-foreground/50 transition-colors hover:bg-white"
+                >
+                  Reset to default
+                </button>
+              </div>
+              <textarea
+                rows={6}
+                value={introMessage}
+                onChange={(e) => setIntroMessage(e.target.value)}
+                placeholder={defaultIntro()}
+                className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-4 py-3 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+              />
+            </div>
+          )}
+
+          {activeTab === "Links" && (
+            <div className="space-y-3">
+              <p className="text-sm text-foreground/60">
+                Links sent to qualified applicants at the end of the chat.
+              </p>
+              {links.map((link, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Label"
+                    value={link.label}
+                    onChange={(e) => {
+                      const next = [...links];
+                      next[i] = { ...next[i], label: e.target.value };
+                      setLinks(next);
+                    }}
+                    className="w-32 rounded-lg border border-foreground/10 bg-white px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                  />
+                  <input
+                    type="url"
+                    placeholder="https://…"
+                    value={link.url}
+                    onChange={(e) => {
+                      const next = [...links];
+                      next[i] = { ...next[i], url: e.target.value };
+                      setLinks(next);
+                    }}
+                    className="flex-1 rounded-lg border border-foreground/10 bg-white px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setLinks(links.filter((_, j) => j !== i))}
+                    className="text-foreground/30 hover:text-red-500"
+                    aria-label="Remove link"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setLinks([...links, { label: "", url: "" }])}
+                className="text-sm text-teal-700 hover:underline"
+              >
+                + Add link
+              </button>
+            </div>
+          )}
+
+          {activeTab === "AI Behavior" && (
+            <div className="space-y-6">
+              {/* Style instructions */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground/80">
+                  Instructions
+                </label>
+                <p className="text-xs text-foreground/40">
+                  Tell the AI how to behave — tone, formatting, how to handle specific situations.
+                </p>
+                <textarea
+                  rows={5}
+                  value={aiInstructions.style}
+                  onChange={(e) =>
+                    setAiInstructions((prev) => ({ ...prev, style: e.target.value }))
+                  }
+                  placeholder="e.g. Be concise. Use a friendly but professional tone. If the applicant asks about parking, mention the garage."
+                  className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-4 py-3 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none focus:ring-2 focus:ring-teal-700/20"
+                />
+              </div>
+
+              {/* Example Q&A pairs */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-sm font-medium text-foreground/80">
+                      Example conversations
+                    </label>
+                    <p className="text-xs text-foreground/40">
+                      Show the AI how you want it to respond in specific scenarios.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAiInstructions((prev) => ({
+                        ...prev,
+                        examples: [...prev.examples, { user: "", assistant: "" }],
+                      }))
+                    }
+                    className="text-sm text-teal-700 hover:underline"
+                  >
+                    + Add example
+                  </button>
+                </div>
+
+                {aiInstructions.examples.length === 0 && (
+                  <p className="text-sm text-foreground/30">No examples yet.</p>
+                )}
+
+                {aiInstructions.examples.map((ex, i) => (
+                  <div
+                    key={i}
+                    className="space-y-2 rounded-lg border border-foreground/8 bg-white p-4"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/35">
+                        Example {i + 1}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAiInstructions((prev) => ({
+                            ...prev,
+                            examples: prev.examples.filter((_, j) => j !== i),
+                          }))
+                        }
+                        className="text-xs text-foreground/30 hover:text-red-500"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-foreground/50">
+                        Tenant says:
+                      </label>
+                      <input
+                        type="text"
+                        value={ex.user}
+                        onChange={(e) => {
+                          const next = [...aiInstructions.examples];
+                          next[i] = { ...next[i], user: e.target.value };
+                          setAiInstructions((prev) => ({ ...prev, examples: next }));
+                        }}
+                        placeholder="e.g. Is the apartment pet-friendly?"
+                        className="w-full rounded-lg border border-foreground/10 bg-foreground/[0.02] px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs text-foreground/50">
+                        AI should respond:
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={ex.assistant}
+                        onChange={(e) => {
+                          const next = [...aiInstructions.examples];
+                          next[i] = { ...next[i], assistant: e.target.value };
+                          setAiInstructions((prev) => ({ ...prev, examples: next }));
+                        }}
+                        placeholder="e.g. We do allow small pets with a $500 deposit. Do you have any pets?"
+                        className="w-full resize-none rounded-lg border border-foreground/10 bg-foreground/[0.02] px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Footer actions */}
+        <section className="flex items-center justify-between border-t border-foreground/10 pt-6">
+          <p className="text-sm text-foreground/50">
+            {resolvedFieldCount} question{resolvedFieldCount !== 1 ? "s" : ""} ·{" "}
+            {rules.length} rule{rules.length !== 1 ? "s" : ""}
+          </p>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded-lg border border-foreground/10 px-4 py-2 text-sm text-foreground/60 transition-colors hover:bg-white disabled:opacity-40"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await save();
+                router.push(`/chat/${id}`);
+              }}
+              className="rounded-lg bg-teal-700 px-5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+            >
+              Preview chat →
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
