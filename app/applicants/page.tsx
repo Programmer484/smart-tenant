@@ -49,6 +49,7 @@ export default function ApplicantsPage() {
   const [expanded, setExpanded] = useState<ExpandedPanel | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const propertyId = typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("property")
@@ -91,6 +92,19 @@ export default function ApplicantsPage() {
           setChatMessages((data as ChatMessage[]) ?? []);
           setChatLoading(false);
         });
+    }
+  }
+
+  async function deleteSession(id: string, title: string) {
+    if (!confirm(`Delete this session from "${title}"? This cannot be undone.`)) return;
+    setDeleting(id);
+    try {
+      await supabase.from("messages").delete().eq("session_id", id);
+      await supabase.from("sessions").delete().eq("id", id);
+      setSessions((prev) => prev.filter((s) => s.id !== id));
+      if (expanded?.sessionId === id) setExpanded(null);
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -172,6 +186,11 @@ export default function ApplicantsPage() {
                                 ? "text-[#1a2e2a]" : "text-teal-700"
                             }`}>
                             {expanded?.sessionId === s.id && expanded.type === "chat" ? "hide" : "chat log"}
+                          </button>
+                          <button onClick={() => deleteSession(s.id, s.listing_title)}
+                            disabled={deleting === s.id}
+                            className="text-[11px] font-medium text-red-400 hover:text-red-600 hover:underline disabled:opacity-50">
+                            {deleting === s.id ? "…" : "delete"}
                           </button>
                         </div>
                       </td>
