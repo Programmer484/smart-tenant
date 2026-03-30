@@ -99,8 +99,10 @@ export default function ApplicantsPage() {
     if (!confirm(`Delete this session from "${title}"? This cannot be undone.`)) return;
     setDeleting(id);
     try {
-      await supabase.from("messages").delete().eq("session_id", id);
-      await supabase.from("sessions").delete().eq("id", id);
+      const { error: msgErr } = await supabase.from("messages").delete().eq("session_id", id);
+      if (msgErr) { console.error("[delete messages]", msgErr); return; }
+      const { error: sesErr } = await supabase.from("sessions").delete().eq("id", id);
+      if (sesErr) { console.error("[delete session]", sesErr); return; }
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (expanded?.sessionId === id) setExpanded(null);
     } finally {

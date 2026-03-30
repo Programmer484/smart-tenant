@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
-
-const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-haiku-4-5-20251001";
+import { callClaude, ClaudeApiError, extractText } from "@/lib/anthropic";
 
 const SYSTEM = `You write applicant-facing property summaries for rental listings.
 
@@ -36,38 +34,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing description" }, { status: 400 });
   }
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1024,
+  try {
+    const response = await callClaude(key, {
       system: SYSTEM,
       messages: [{ role: "user", content: description }],
-    }),
-  });
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    return NextResponse.json(
-      { error: errText || res.statusText },
-      { status: res.status >= 500 ? 502 : res.status },
-    );
+    const propertyInfo = extractText(response);
+    return NextResponse.json({ propertyInfo });
+  } catch (err) {
+    if (err instanceof ClaudeApiError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
-
-  const data = (await res.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
-
-  const propertyInfo = data.content
-    ?.filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("")
-    .trim();
-
-  return NextResponse.json({ propertyInfo });
 }

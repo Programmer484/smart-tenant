@@ -14,10 +14,24 @@ function satisfies(
   target: string,
   valueKind: LandlordField["valueKind"],
 ): boolean {
-  if (valueKind === "number" || valueKind === "date") {
+  if (valueKind === "number") {
     const a = Number(actual);
     const t = Number(target);
-    if (isNaN(a) || isNaN(t)) return true; // can't evaluate confidently — don't penalise
+    if (isNaN(a) || isNaN(t)) return true;
+    switch (operator) {
+      case "==": return a === t;
+      case "!=": return a !== t;
+      case ">":  return a > t;
+      case ">=": return a >= t;
+      case "<":  return a < t;
+      case "<=": return a <= t;
+    }
+  }
+
+  if (valueKind === "date") {
+    const a = Date.parse(actual);
+    const t = Date.parse(target);
+    if (isNaN(a) || isNaN(t)) return true;
     switch (operator) {
       case "==": return a === t;
       case "!=": return a !== t;

@@ -26,7 +26,8 @@ export async function deleteProperty(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  await supabase.from("properties").delete().eq("id", id).eq("user_id", user.id);
+  const { error } = await supabase.from("properties").delete().eq("id", id).eq("user_id", user.id);
+  if (error) throw new Error("Failed to delete property");
   redirect("/");
 }
 

@@ -5,9 +5,7 @@ import {
   OPERATORS_BY_KIND,
   validateRule,
 } from "@/lib/landlord-rule";
-
-const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-haiku-4-5-20251001";
+import { callClaude, ClaudeApiError, extractText, stripCodeFences } from "@/lib/anthropic";
 
 function buildSystemPrompt(fields: LandlordField[]): string {
   const fieldDescriptions = fields
@@ -117,55 +115,35 @@ export async function POST(req: Request) {
   }
   const fields = rec.fields as LandlordField[];
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1024,
+  try {
+    const response = await callClaude(key, {
       system: buildSystemPrompt(fields),
       messages: [{ role: "user", content: description }],
-    }),
-  });
+    });
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    return NextResponse.json(
-      { error: errBody || res.statusText },
-      { status: res.status >= 500 ? 502 : res.status },
-    );
+    const raw = extractText(response);
+    const cleaned = stripCodeFences(raw);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return NextResponse.json({ error: "AI returned invalid JSON", raw: cleaned }, { status: 502 });
+    }
+
+    if (!Array.isArray(parsed)) {
+      return NextResponse.json({ error: "AI response was not an array", raw: cleaned }, { status: 502 });
+    }
+
+    const rules = parsed
+      .map((v) => parseGeneratedRule(v, fields))
+      .filter((r): r is LandlordRule => r !== null);
+
+    return NextResponse.json({ rules });
+  } catch (err) {
+    if (err instanceof ClaudeApiError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
-
-  const data = (await res.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
-
-  const raw = data.content
-    ?.filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("")
-    .trim();
-
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    return NextResponse.json({ error: "AI returned invalid JSON", raw: cleaned }, { status: 502 });
-  }
-
-  if (!Array.isArray(parsed)) {
-    return NextResponse.json({ error: "AI response was not an array", raw: cleaned }, { status: 502 });
-  }
-
-  const rules = parsed
-    .map((v) => parseGeneratedRule(v, fields))
-    .filter((r): r is LandlordRule => r !== null);
-
-  return NextResponse.json({ rules });
 }

@@ -5,9 +5,7 @@ import type { AiInstructions } from "@/lib/property";
 import { resolveAiInstructions } from "@/lib/property";
 import { createServiceClient } from "@/lib/supabase/service";
 import { evaluateRules, describeViolation } from "@/lib/rule-engine";
-
-const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-haiku-4-5-20251001";
+import { callClaude, ClaudeApiError } from "@/lib/anthropic";
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
 type Extraction = { fieldId: string; value: string };
@@ -234,45 +232,27 @@ export async function POST(req: Request) {
 
   const system = buildSystemPrompt(title, description, fields, rules, answers, ai);
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1024,
+  let data;
+  try {
+    data = await callClaude(key, {
       system,
       messages,
       tools: [SCREEN_RESPONSE_TOOL],
       tool_choice: { type: "tool", name: "screen_response" },
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    return NextResponse.json(
-      { error: errText || res.statusText },
-      { status: res.status >= 500 ? 502 : res.status },
-    );
+    });
+  } catch (err) {
+    if (err instanceof ClaudeApiError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
 
-  const data = (await res.json()) as {
-    content: Array<{
-      type: string;
-      text?: string;
-      input?: {
-        reply?: string;
-        extracted?: Extraction[];
-        message_relevant?: boolean;
-      };
-    }>;
-  };
-
   const toolBlock = data.content?.find((b) => b.type === "tool_use");
-  const input = toolBlock?.input;
+  const input = toolBlock?.input as {
+    reply?: string;
+    extracted?: Extraction[];
+    message_relevant?: boolean;
+  } | undefined;
 
   let reply = input?.reply ?? "I'm sorry, something went wrong. Could you try again?";
   const rawExtracted = Array.isArray(input?.extracted) ? input.extracted : [];
@@ -335,6 +315,7 @@ export async function POST(req: Request) {
     const limit = ai.qualifiedFollowUps;
 
     if (
+      (limit === 0 && isQualified) ||
       (limit > 0 && followUps >= limit) ||
       (!messageRelevant && isQualified)
     ) {

@@ -162,16 +162,25 @@ export default function ChatPage() {
         }),
       });
 
+      if (!res.ok) {
+        const errData = await res.json().catch(() => null);
+        const errMsg = (errData as { error?: string } | null)?.error ?? "Something went wrong.";
+        setMessages((prev) => [
+          ...prev,
+          { id: generateId(), role: "assistant", text: errMsg },
+        ]);
+        return;
+      }
+
       const data = (await res.json()) as {
         reply?: string;
         extracted?: Extraction[];
         sessionStatus?: string;
         offTopicWarning?: boolean;
-        error?: string;
       };
 
       const extracted = data.extracted ?? [];
-      const reply = data.reply ?? data.error ?? "Something went wrong.";
+      const reply = data.reply ?? "Something went wrong.";
       const status = data.sessionStatus ?? "in_progress";
 
       setMessages((prev) => [

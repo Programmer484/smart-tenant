@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useId } from "react";
+import { useState, useEffect, useId } from "react";
 import {
   FIELD_VALUE_KINDS,
   FieldValueKind,
@@ -269,6 +269,10 @@ export default function LandlordFieldsSection({
   const [rows, setRows] = useState<FieldWithKey[]>(() =>
     fields.map((f) => ({ ...f, _key: generateId() }))
   );
+
+  useEffect(() => {
+    setRows(fields.map((f) => ({ ...f, _key: generateId() })));
+  }, [fields]);
 
   function update(next: FieldWithKey[]) {
     setRows(next);

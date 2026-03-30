@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useId } from "react";
+import { useState, useEffect, useId } from "react";
 import type { LandlordField } from "@/lib/landlord-field";
 import {
   OPERATORS_BY_KIND,
@@ -228,6 +228,10 @@ export default function RulesSection({
   const [rows, setRows] = useState<RuleWithKey[]>(() =>
     rules.map((r) => ({ ...r, _key: generateId() })),
   );
+
+  useEffect(() => {
+    setRows(rules.map((r) => ({ ...r, _key: generateId() })));
+  }, [rules]);
 
   function update(next: RuleWithKey[]) {
     setRows(next);

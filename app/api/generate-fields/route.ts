@@ -7,9 +7,7 @@ import {
   normalizeEnumOptions,
   validateEnumOptions,
 } from "@/lib/landlord-field";
-
-const ANTHROPIC_VERSION = "2023-06-01";
-const MODEL = "claude-haiku-4-5-20251001";
+import { callClaude, ClaudeApiError, extractText, stripCodeFences } from "@/lib/anthropic";
 
 const SYSTEM_PROMPT = `You are a rental application assistant. Given a property description, generate a list of applicant screening fields the landlord should collect.
 
@@ -83,7 +81,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing description" }, { status: 400 });
   }
 
-  // Labels of shared fields already included — AI should not duplicate these topics
   const excludeLabels: string[] = Array.isArray(rec.excludeLabels)
     ? (rec.excludeLabels as unknown[]).filter((x): x is string => typeof x === "string")
     : [];
@@ -93,61 +90,35 @@ export async function POST(req: Request) {
       ? `\n\nDo NOT generate fields for topics already covered by these shared questions (they apply to all properties):\n${excludeLabels.map((l) => `  - ${l}`).join("\n")}\nOnly generate fields specific to this property.`
       : "";
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 2048,
+  try {
+    const response = await callClaude(key, {
       system: SYSTEM_PROMPT + exclusionNote,
       messages: [{ role: "user", content: description }],
-    }),
-  });
+      max_tokens: 2048,
+    });
 
-  if (!res.ok) {
-    const errBody = await res.text();
-    return NextResponse.json(
-      { error: errBody || res.statusText },
-      { status: res.status >= 500 ? 502 : res.status },
-    );
+    const raw = extractText(response);
+    const cleaned = stripCodeFences(raw);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      return NextResponse.json({ error: "AI returned invalid JSON", raw: cleaned }, { status: 502 });
+    }
+
+    if (!Array.isArray(parsed)) {
+      return NextResponse.json({ error: "AI response was not an array", raw: cleaned }, { status: 502 });
+    }
+
+    const fields = parsed
+      .map(parseGeneratedField)
+      .filter((x): x is LandlordField => x !== null);
+    return NextResponse.json({ fields });
+  } catch (err) {
+    if (err instanceof ClaudeApiError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
-
-  const data = (await res.json()) as {
-    content: Array<{ type: string; text?: string }>;
-  };
-
-  const raw = data.content
-    ?.filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("")
-    .trim();
-
-  // Strip markdown code fences if the model adds them despite instructions
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    return NextResponse.json(
-      { error: "AI returned invalid JSON", raw: cleaned },
-      { status: 502 },
-    );
-  }
-
-  if (!Array.isArray(parsed)) {
-    return NextResponse.json(
-      { error: "AI response was not an array", raw: cleaned },
-      { status: 502 },
-    );
-  }
-
-  const fields = parsed
-    .map(parseGeneratedField)
-    .filter((x): x is LandlordField => x !== null);
-  return NextResponse.json({ fields });
 }

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions } from "@/lib/property";
-import { DEFAULT_AI_INSTRUCTIONS } from "@/lib/property";
+import { DEFAULT_AI_INSTRUCTIONS, resolveAiInstructions, defaultIntroMessage } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 import LandlordFieldsSection from "@/app/components/LandlordFieldsSection";
@@ -117,7 +117,7 @@ export default function PropertySetupPage() {
       setOwnFields(p.own_fields ?? []);
       setRules(p.rules ?? []);
       setLinks(p.links ?? []);
-      setAiInstructions(p.ai_instructions ?? DEFAULT_AI_INSTRUCTIONS);
+      setAiInstructions(resolveAiInstructions(p.ai_instructions));
       setStatus(p.status);
 
       const shared = (sharedRes.data as SharedFieldRecord[] | null) ?? [];
@@ -155,7 +155,7 @@ export default function PropertySetupPage() {
   );
 
   function defaultIntro() {
-    return `Thank you for your interest in ${title.trim() || "this property"}. Please answer the following questions to help us determine your eligibility.`;
+    return defaultIntroMessage(title.trim());
   }
 
   // ── Two-pass generation ────────────────────────────────────────────────
@@ -169,7 +169,6 @@ export default function PropertySetupPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description,
-          excludeFieldIds: sharedFieldIds,
           excludeLabels: allShared
             .filter((f) => sharedFieldIds.includes(f.id))
             .map((f) => f.label),
