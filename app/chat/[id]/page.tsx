@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions } from "@/lib/property";
-import { resolveFields, defaultIntroMessage } from "@/lib/property";
+import { resolveFields, defaultIntroMessage, resolveAiInstructions } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 
@@ -22,10 +22,12 @@ type ChatConfig = {
   fields: LandlordField[];
   rules: LandlordRule[];
   links: ListingLink[];
-  aiInstructions?: AiInstructions;
+  aiInstructions: AiInstructions;
 };
 
-function generateId() { return Math.random().toString(36).slice(2, 9); }
+function generateId() {
+  return Math.random().toString(36).slice(2, 9);
+}
 
 function firstGreeting(intro: string, fields: LandlordField[]) {
   const first = fields[0]?.label;
@@ -68,12 +70,20 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   const [debugOpen, setDebugOpen] = useState(false);
+
+  // Lifecycle state
   const [clarificationPending, setClarificationPending] = useState(false);
   const [rejected, setRejected] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const [qualified, setQualified] = useState(false);
+  const [offTopicCount, setOffTopicCount] = useState(0);
+  const [qualifiedFollowUpCount, setQualifiedFollowUpCount] = useState(0);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Load property + shared fields, resolve into ChatConfig
+  const inputDisabled = rejected || completed;
+
   useEffect(() => {
     async function load() {
       const [propRes, sharedRes] = await Promise.all([
@@ -103,7 +113,7 @@ export default function ChatPage() {
         fields,
         rules: (p.rules as LandlordRule[]) ?? [],
         links: (p.links as ListingLink[]) ?? [],
-        aiInstructions: (p.ai_instructions as AiInstructions) ?? undefined,
+        aiInstructions: resolveAiInstructions(p.ai_instructions),
       };
       setConfig(cfg);
       setMessages([{ id: "init", role: "assistant", text: firstGreeting(intro, fields) }]);
@@ -117,7 +127,7 @@ export default function ChatPage() {
 
   async function send() {
     const text = input.trim();
-    if (!text || sending || !config || rejected) return;
+    if (!text || sending || !config || inputDisabled) return;
 
     const userMsg: Message = { id: generateId(), role: "user", text };
     const nextMessages = [...messages, userMsg];
@@ -125,9 +135,11 @@ export default function ChatPage() {
     setInput("");
     setSending(true);
 
-    const apiHistory: ApiMessage[] = nextMessages
-      .filter((m) => m.id !== "init")
-      .map((m) => ({ role: m.role, content: m.text }));
+    // Include init message so AI sees the greeting with the first question
+    const apiHistory: ApiMessage[] = nextMessages.map((m) => ({
+      role: m.role,
+      content: m.text,
+    }));
 
     try {
       const res = await fetch("/api/chat", {
@@ -144,13 +156,17 @@ export default function ChatPage() {
           sessionId,
           propertyId: config.id,
           clarificationPending,
+          offTopicCount,
+          qualifiedFollowUpCount,
+          isQualified: qualified,
         }),
       });
 
       const data = (await res.json()) as {
         reply?: string;
         extracted?: Extraction[];
-        sessionStatus?: "in_progress" | "clarifying" | "rejected";
+        sessionStatus?: string;
+        offTopicWarning?: boolean;
         error?: string;
       };
 
@@ -173,13 +189,27 @@ export default function ChatPage() {
         });
       }
 
+      // Update lifecycle state
       if (status === "rejected") {
         setRejected(true);
+        setClarificationPending(false);
+      } else if (status === "completed") {
+        setCompleted(true);
+        setQualified(true);
+      } else if (status === "qualified") {
+        if (qualified) {
+          setQualifiedFollowUpCount((c) => c + 1);
+        }
+        setQualified(true);
         setClarificationPending(false);
       } else if (status === "clarifying") {
         setClarificationPending(true);
       } else {
         setClarificationPending(false);
+      }
+
+      if (data.offTopicWarning) {
+        setOffTopicCount((c) => c + 1);
       }
     } catch {
       setMessages((prev) => [
@@ -283,7 +313,15 @@ export default function ChatPage() {
       </main>
 
       <footer className="border-t border-black/8 bg-[#f0ede6] px-4 py-4">
-        {rejected ? (
+        {completed ? (
+          <div className="mx-auto flex w-full max-w-xl items-center gap-3 rounded-xl border border-teal-200 bg-teal-50 px-4 py-3">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0 text-teal-600" aria-hidden>
+              <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M5 8.5l2 2 4-4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <p className="text-sm text-teal-800">Your application is complete. We'll be in touch!</p>
+          </div>
+        ) : rejected ? (
           <div className="mx-auto flex w-full max-w-xl items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="shrink-0 text-red-500" aria-hidden>
               <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.4" />

@@ -5,11 +5,30 @@ export type ListingLink = { label: string; url: string };
 
 export type AiExample = { user: string; assistant: string };
 export type AiInstructions = {
-  /** Freeform style/behavior instructions for the AI */
   style: string;
-  /** Sample Q&A pairs the AI should learn from */
   examples: AiExample[];
+  /** Off-topic messages before auto-rejection (0 = unlimited) */
+  offTopicLimit: number;
+  /** Follow-up messages allowed after qualification (0 = close immediately) */
+  qualifiedFollowUps: number;
+  /** How to handle questions not covered by the property description */
+  unknownInfoBehavior: "deflect" | "ignore";
 };
+
+export const DEFAULT_AI_INSTRUCTIONS: AiInstructions = {
+  style: "",
+  examples: [],
+  offTopicLimit: 3,
+  qualifiedFollowUps: 3,
+  unknownInfoBehavior: "deflect",
+};
+
+/** Merge partial/missing settings with defaults */
+export function resolveAiInstructions(
+  raw: Partial<AiInstructions> | null | undefined,
+): AiInstructions {
+  return { ...DEFAULT_AI_INSTRUCTIONS, ...raw };
+}
 
 /** Raw shape as stored in the `properties` table */
 export type PropertyRecord = {

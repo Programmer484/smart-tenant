@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions, AiExample } from "@/lib/property";
+import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions } from "@/lib/property";
+import { DEFAULT_AI_INSTRUCTIONS } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 import LandlordFieldsSection from "@/app/components/LandlordFieldsSection";
@@ -12,7 +13,6 @@ import RulesSection from "@/app/components/RulesSection";
 
 const TABS = ["Questions", "Rules", "Property Info", "Messages", "Links", "AI Behavior"] as const;
 
-const DEFAULT_AI_INSTRUCTIONS: AiInstructions = { style: "", examples: [] };
 type Tab = (typeof TABS)[number];
 
 // ─── Shared-fields picker ──────────────────────────────────────────────────
@@ -483,10 +483,94 @@ export default function PropertySetupPage() {
 
           {activeTab === "AI Behavior" && (
             <div className="space-y-6">
+              {/* Behavioral settings */}
+              <div className="space-y-4 rounded-lg border border-foreground/8 bg-white p-5">
+                <h3 className="text-sm font-medium text-foreground/80">Conversation controls</h3>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground/60">
+                      Off-topic limit
+                    </label>
+                    <p className="text-[11px] text-foreground/35">
+                      Messages before auto-rejection. 0 = unlimited.
+                    </p>
+                    <input
+                      type="number"
+                      min={0}
+                      value={aiInstructions.offTopicLimit ?? 3}
+                      onChange={(e) =>
+                        setAiInstructions((prev) => ({
+                          ...prev,
+                          offTopicLimit: Math.max(0, parseInt(e.target.value) || 0),
+                        }))
+                      }
+                      className="w-24 rounded-lg border border-foreground/10 px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground/60">
+                      Post-qualified follow-ups
+                    </label>
+                    <p className="text-[11px] text-foreground/35">
+                      Messages allowed after qualification. 0 = close immediately.
+                    </p>
+                    <input
+                      type="number"
+                      min={0}
+                      value={aiInstructions.qualifiedFollowUps ?? 3}
+                      onChange={(e) =>
+                        setAiInstructions((prev) => ({
+                          ...prev,
+                          qualifiedFollowUps: Math.max(0, parseInt(e.target.value) || 0),
+                        }))
+                      }
+                      className="w-24 rounded-lg border border-foreground/10 px-3 py-2 text-sm focus:border-teal-700/40 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-foreground/60">
+                    Unknown info handling
+                  </label>
+                  <p className="text-[11px] text-foreground/35">
+                    When an applicant asks about something not in the description.
+                  </p>
+                  <div className="flex gap-4 pt-1">
+                    <label className="flex items-center gap-2 text-sm text-foreground/70">
+                      <input
+                        type="radio"
+                        name="unknownInfo"
+                        checked={(aiInstructions.unknownInfoBehavior ?? "deflect") === "deflect"}
+                        onChange={() =>
+                          setAiInstructions((prev) => ({ ...prev, unknownInfoBehavior: "deflect" }))
+                        }
+                        className="accent-teal-700"
+                      />
+                      Say &quot;I don&apos;t know, contact landlord&quot;
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-foreground/70">
+                      <input
+                        type="radio"
+                        name="unknownInfo"
+                        checked={aiInstructions.unknownInfoBehavior === "ignore"}
+                        onChange={() =>
+                          setAiInstructions((prev) => ({ ...prev, unknownInfoBehavior: "ignore" }))
+                        }
+                        className="accent-teal-700"
+                      />
+                      Redirect to screening
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               {/* Style instructions */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground/80">
-                  Instructions
+                  Style instructions
                 </label>
                 <p className="text-xs text-foreground/40">
                   Tell the AI how to behave — tone, formatting, how to handle specific situations.
@@ -518,7 +602,7 @@ export default function PropertySetupPage() {
                     onClick={() =>
                       setAiInstructions((prev) => ({
                         ...prev,
-                        examples: [...prev.examples, { user: "", assistant: "" }],
+                        examples: [...(prev.examples ?? []), { user: "", assistant: "" }],
                       }))
                     }
                     className="text-sm text-teal-700 hover:underline"
@@ -527,11 +611,11 @@ export default function PropertySetupPage() {
                   </button>
                 </div>
 
-                {aiInstructions.examples.length === 0 && (
+                {(aiInstructions.examples ?? []).length === 0 && (
                   <p className="text-sm text-foreground/30">No examples yet.</p>
                 )}
 
-                {aiInstructions.examples.map((ex, i) => (
+                {(aiInstructions.examples ?? []).map((ex, i) => (
                   <div
                     key={i}
                     className="space-y-2 rounded-lg border border-foreground/8 bg-white p-4"
@@ -545,7 +629,7 @@ export default function PropertySetupPage() {
                         onClick={() =>
                           setAiInstructions((prev) => ({
                             ...prev,
-                            examples: prev.examples.filter((_, j) => j !== i),
+                            examples: (prev.examples ?? []).filter((_, j) => j !== i),
                           }))
                         }
                         className="text-xs text-foreground/30 hover:text-red-500"
@@ -561,7 +645,7 @@ export default function PropertySetupPage() {
                         type="text"
                         value={ex.user}
                         onChange={(e) => {
-                          const next = [...aiInstructions.examples];
+                          const next = [...(aiInstructions.examples ?? [])];
                           next[i] = { ...next[i], user: e.target.value };
                           setAiInstructions((prev) => ({ ...prev, examples: next }));
                         }}
@@ -577,7 +661,7 @@ export default function PropertySetupPage() {
                         rows={2}
                         value={ex.assistant}
                         onChange={(e) => {
-                          const next = [...aiInstructions.examples];
+                          const next = [...(aiInstructions.examples ?? [])];
                           next[i] = { ...next[i], assistant: e.target.value };
                           setAiInstructions((prev) => ({ ...prev, examples: next }));
                         }}

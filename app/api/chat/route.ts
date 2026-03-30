@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
-import type { LandlordField } from "@/lib/landlord-field";
+import type { LandlordField, FieldValueKind } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 import type { AiInstructions } from "@/lib/property";
+import { resolveAiInstructions } from "@/lib/property";
 import { createServiceClient } from "@/lib/supabase/service";
 import { evaluateRules, describeViolation } from "@/lib/rule-engine";
 
@@ -9,6 +10,70 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const MODEL = "claude-haiku-4-5-20251001";
 
 type IncomingMessage = { role: "user" | "assistant"; content: string };
+type Extraction = { fieldId: string; value: string };
+
+// ─── Tool definition ────────────────────────────────────────────────
+
+const SCREEN_RESPONSE_TOOL = {
+  name: "screen_response",
+  description:
+    "Respond to the applicant and extract any screening field values from their message.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      reply: {
+        type: "string",
+        description: "Your conversational message to the applicant.",
+      },
+      extracted: {
+        type: "array",
+        description:
+          "Field values found in the applicant's message. Empty array if none.",
+        items: {
+          type: "object",
+          properties: {
+            fieldId: { type: "string" },
+            value: { type: "string" },
+          },
+          required: ["fieldId", "value"],
+        },
+      },
+      message_relevant: {
+        type: "boolean",
+        description:
+          "true if the message is a screening answer OR a property question. false if completely off-topic.",
+      },
+    },
+    required: ["reply", "extracted", "message_relevant"],
+  },
+};
+
+// ─── Value validation ───────────────────────────────────────────────
+
+function isValidExtraction(
+  value: string,
+  kind: FieldValueKind,
+  options?: string[],
+): boolean {
+  switch (kind) {
+    case "number":
+      return !isNaN(Number(value));
+    case "boolean":
+      return ["true", "false"].includes(value.toLowerCase());
+    case "date":
+      return !isNaN(Date.parse(value));
+    case "enum":
+      return (options ?? []).some(
+        (o) => o.toLowerCase() === value.toLowerCase(),
+      );
+    case "text":
+      return true;
+    default:
+      return true;
+  }
+}
+
+// ─── System prompt ──────────────────────────────────────────────────
 
 function buildSystemPrompt(
   title: string,
@@ -16,7 +81,7 @@ function buildSystemPrompt(
   fields: LandlordField[],
   rules: LandlordRule[],
   answers: Record<string, string>,
-  aiInstructions?: AiInstructions,
+  ai: AiInstructions,
 ): string {
   const answered = fields.filter((f) => answers[f.id] !== undefined);
   const unanswered = fields.filter((f) => answers[f.id] === undefined);
@@ -24,30 +89,46 @@ function buildSystemPrompt(
 
   const answeredBlock =
     answered.length > 0
-      ? answered.map((f) => `  - ${f.label} (${f.id}): ${answers[f.id]}`).join("\n")
+      ? answered
+          .map((f) => `  - ${f.label} (${f.id}): ${answers[f.id]}`)
+          .join("\n")
       : "  None yet.";
 
   const unansweredBlock =
     unanswered.length > 0
-      ? unanswered.map((f) => `  - ${f.label} (${f.id})`).join("\n")
+      ? unanswered
+          .map((f) => {
+            let line = `  - ${f.label} (${f.id}), type: ${f.valueKind}`;
+            if (f.options?.length) line += `, options: ${f.options.join(", ")}`;
+            if (f.collectHint) line += ` [hint: ${f.collectHint}]`;
+            return line;
+          })
+          .join("\n")
       : "  All collected.";
 
   const nextInstruction = nextField
     ? `After addressing the applicant's message, ask this question next: "${nextField.label}"`
-    : `All screening questions have been collected. Thank the applicant and let them know their application is complete and will be reviewed.`;
+    : "All screening questions have been collected. Thank the applicant and let them know their application is complete and will be reviewed.";
 
   const rulesBlock =
     rules.length > 0
       ? rules
           .map((r) => {
             const field = fields.find((f) => f.id === r.fieldId);
-            return field ? `  - ${field.label} ${r.operator} ${r.value}` : null;
+            return field
+              ? `  - ${field.label} ${r.operator} ${r.value}`
+              : null;
           })
           .filter(Boolean)
           .join("\n")
       : "  None defined.";
 
-  return `You are a warm and professional rental screening assistant for the following property.
+  const groundingInstruction =
+    ai.unknownInfoBehavior === "ignore"
+      ? "Do not answer questions about details not covered in the description above. Redirect the applicant back to the screening questions."
+      : "Only answer property questions using the description above. If the information is not there, say you don't have that detail and suggest contacting the landlord. Never invent details.";
+
+  let prompt = `You are a warm and professional rental screening assistant for the following property.
 
 Property: ${title}
 ---
@@ -64,36 +145,38 @@ STILL NEED:
 ${unansweredBlock}
 
 YOUR JOB:
-1. If the applicant asks a question about the property, answer it using only information from the property description above. Keep it brief.
-2. Extract any screening answers from their message. Only extract values for fields in the STILL NEED list.
+1. ${groundingInstruction}
+2. You MUST extract ALL values from the applicant's message that match fields in the STILL NEED list. Never skip an extraction, even if you also plan to ask a follow-up. Values should be plain strings: numbers like "3500", booleans as "true" or "false".
 3. ${nextInstruction}
 
-Keep your reply concise and conversational. One question at a time.${
-    aiInstructions?.style
-      ? `\n\nLANDLORD STYLE INSTRUCTIONS:\n${aiInstructions.style}`
-      : ""
-  }${
-    aiInstructions?.examples?.length
-      ? `\n\nEXAMPLE CONVERSATIONS (match this style):\n${aiInstructions.examples
-          .filter((e) => e.user.trim() && e.assistant.trim())
-          .map((e) => `Tenant: "${e.user}"\nYou: "${e.assistant}"`)
-          .join("\n\n")}`
-      : ""
+Keep your reply concise and conversational. One question at a time.`;
+
+  if (ai.style) {
+    prompt += `\n\nLANDLORD STYLE INSTRUCTIONS:\n${ai.style}`;
   }
 
-Respond with ONLY valid JSON — no markdown, no explanation:
-{
-  "reply": "your message to the applicant",
-  "extracted": [{ "fieldId": "...", "value": "..." }]
+  if (ai.examples?.length) {
+    const pairs = ai.examples
+      .filter((e) => e.user.trim() && e.assistant.trim())
+      .map((e) => `Tenant: "${e.user}"\nYou: "${e.assistant}"`)
+      .join("\n\n");
+    if (pairs) {
+      prompt += `\n\nEXAMPLE CONVERSATIONS (match this style):\n${pairs}`;
+    }
+  }
+
+  return prompt;
 }
 
-"extracted" may be an empty array. Values should be plain strings: numbers like "3500", booleans as "true" or "false".`;
-}
+// ─── POST handler ───────────────────────────────────────────────────
 
 export async function POST(req: Request) {
   const key = process.env.CLAUDE_API_KEY;
   if (!key) {
-    return NextResponse.json({ error: "CLAUDE_API_KEY is not set" }, { status: 500 });
+    return NextResponse.json(
+      { error: "CLAUDE_API_KEY is not set" },
+      { status: 500 },
+    );
   }
 
   let body: unknown;
@@ -108,25 +191,48 @@ export async function POST(req: Request) {
   }
   const rec = body as Record<string, unknown>;
 
-  const title = typeof rec.title === "string" ? rec.title.trim() : "Rental Property";
-  const description = typeof rec.description === "string" ? rec.description.trim() : "";
-  const fields = Array.isArray(rec.fields) ? (rec.fields as LandlordField[]) : [];
-  const rules = Array.isArray(rec.rules) ? (rec.rules as LandlordRule[]) : [];
+  const title =
+    typeof rec.title === "string" ? rec.title.trim() : "Rental Property";
+  const description =
+    typeof rec.description === "string" ? rec.description.trim() : "";
+  const fields = Array.isArray(rec.fields)
+    ? (rec.fields as LandlordField[])
+    : [];
+  const rules = Array.isArray(rec.rules)
+    ? (rec.rules as LandlordRule[])
+    : [];
   const answers =
     rec.answers && typeof rec.answers === "object"
       ? (rec.answers as Record<string, string>)
       : {};
-  const messages = Array.isArray(rec.messages) ? (rec.messages as IncomingMessage[]) : [];
+  const messages = Array.isArray(rec.messages)
+    ? (rec.messages as IncomingMessage[])
+    : [];
   const sessionId = typeof rec.sessionId === "string" ? rec.sessionId : null;
-  const propertyId = typeof rec.propertyId === "string" ? rec.propertyId : null;
+  const propertyId =
+    typeof rec.propertyId === "string" ? rec.propertyId : null;
   const clarificationPending = rec.clarificationPending === true;
-  const aiInstructions = rec.aiInstructions as AiInstructions | undefined;
+  const offTopicCount =
+    typeof rec.offTopicCount === "number" ? rec.offTopicCount : 0;
+  const qualifiedFollowUpCount =
+    typeof rec.qualifiedFollowUpCount === "number"
+      ? rec.qualifiedFollowUpCount
+      : 0;
+  const isQualified = rec.isQualified === true;
+  const ai = resolveAiInstructions(
+    rec.aiInstructions as Partial<AiInstructions> | undefined,
+  );
 
   if (messages.length === 0) {
-    return NextResponse.json({ error: "No messages provided" }, { status: 400 });
+    return NextResponse.json(
+      { error: "No messages provided" },
+      { status: 400 },
+    );
   }
 
-  const system = buildSystemPrompt(title, description, fields, rules, answers, aiInstructions);
+  // ── Call Claude with tool use ──
+
+  const system = buildSystemPrompt(title, description, fields, rules, answers, ai);
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -135,7 +241,14 @@ export async function POST(req: Request) {
       "anthropic-version": ANTHROPIC_VERSION,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ model: MODEL, max_tokens: 1024, system, messages }),
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 1024,
+      system,
+      messages,
+      tools: [SCREEN_RESPONSE_TOOL],
+      tool_choice: { type: "tool", name: "screen_response" },
+    }),
   });
 
   if (!res.ok) {
@@ -147,75 +260,126 @@ export async function POST(req: Request) {
   }
 
   const data = (await res.json()) as {
-    content: Array<{ type: string; text?: string }>;
+    content: Array<{
+      type: string;
+      text?: string;
+      input?: {
+        reply?: string;
+        extracted?: Extraction[];
+        message_relevant?: boolean;
+      };
+    }>;
   };
 
-  const raw = data.content
-    ?.filter((b) => b.type === "text")
-    .map((b) => b.text ?? "")
-    .join("")
-    .trim();
+  const toolBlock = data.content?.find((b) => b.type === "tool_use");
+  const input = toolBlock?.input;
 
-  const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  let reply = input?.reply ?? "I'm sorry, something went wrong. Could you try again?";
+  const rawExtracted = Array.isArray(input?.extracted) ? input.extracted : [];
+  const messageRelevant = input?.message_relevant !== false;
 
-  let parsed: { reply?: string; extracted?: { fieldId: string; value: string }[] };
-  try {
-    parsed = JSON.parse(cleaned) as typeof parsed;
-  } catch {
-    return NextResponse.json({ reply: raw, extracted: [], sessionStatus: "in_progress" });
+  // ── Validate extractions ──
+
+  const extracted: Extraction[] = [];
+  for (const ex of rawExtracted) {
+    const field = fields.find((f) => f.id === ex.fieldId);
+    if (!field) continue;
+    if (answers[ex.fieldId] !== undefined) continue;
+    if (!isValidExtraction(ex.value, field.valueKind, field.options)) {
+      console.warn(
+        `[chat] Dropped invalid extraction: ${ex.fieldId}="${ex.value}" (expected ${field.valueKind})`,
+      );
+      continue;
+    }
+    extracted.push(ex);
   }
 
-  let reply = typeof parsed.reply === "string" ? parsed.reply : raw;
-  const extracted = Array.isArray(parsed.extracted) ? parsed.extracted : [];
+  // ── Merge answers + evaluate rules ──
 
-  // Merge newly extracted answers with known answers to evaluate rules
   const mergedAnswers = { ...answers };
   for (const { fieldId, value } of extracted) {
-    if (fields.some((f) => f.id === fieldId)) {
-      mergedAnswers[fieldId] = value;
-    }
+    mergedAnswers[fieldId] = value;
   }
 
-  // Deterministic rule evaluation — no AI involvement
   const violations = evaluateRules(rules, fields, mergedAnswers);
   const firstViolation = violations[0] ?? null;
+  const allCollected =
+    fields.length > 0 &&
+    fields.every((f) => mergedAnswers[f.id] !== undefined);
 
-  // Check if all fields have been answered
-  const allCollected = fields.length > 0 && fields.every((f) => mergedAnswers[f.id] !== undefined);
+  // ── Determine session status ──
 
-  let sessionStatus: "in_progress" | "clarifying" | "rejected" | "qualified" = "in_progress";
+  let sessionStatus:
+    | "in_progress"
+    | "clarifying"
+    | "rejected"
+    | "qualified"
+    | "completed" = "in_progress";
+  let offTopicWarning = false;
 
+  // 1. Rule violation system (two-strike, independent of off-topic)
   if (firstViolation) {
     const requirement = describeViolation(firstViolation);
 
     if (clarificationPending) {
-      // Second strike — reject
       sessionStatus = "rejected";
       reply = `Thank you for taking the time to apply. Unfortunately, we're unable to move forward with your application for this property. The reason is that ${requirement}. We wish you the best in your search.`;
     } else {
-      // First strike — inform directly, leave door open for immediate correction
       sessionStatus = "clarifying";
       reply = `Based on your response, you may not meet our requirement for this property: ${requirement}. If this is incorrect, please let us know now.`;
     }
   }
+  // 2. Qualified phase
+  else if (isQualified || (!firstViolation && allCollected)) {
+    const followUps = qualifiedFollowUpCount + (isQualified ? 1 : 0);
+    const limit = ai.qualifiedFollowUps;
 
-  if (!firstViolation && allCollected) {
-    sessionStatus = "qualified";
+    if (
+      (limit > 0 && followUps >= limit) ||
+      (!messageRelevant && isQualified)
+    ) {
+      sessionStatus = "completed";
+      reply =
+        "Thank you for your interest! Your application is complete and will be reviewed shortly. We'll be in touch. Good luck!";
+    } else {
+      sessionStatus = "qualified";
+    }
+  }
+  // 3. Off-topic system (independent of rules)
+  else if (!messageRelevant) {
+    const newCount = offTopicCount + 1;
+    const limit = ai.offTopicLimit;
+
+    if (limit > 0 && newCount >= limit) {
+      sessionStatus = "rejected";
+      reply =
+        "It seems like you may not be interested in proceeding with this application. We're going to close this session. If you'd like to apply in the future, feel free to start a new conversation.";
+    } else {
+      offTopicWarning = true;
+    }
   }
 
-  // Persist to Supabase (best-effort)
+  // ── Persist to Supabase (best-effort) ──
+
+  const dbStatus =
+    sessionStatus === "rejected"
+      ? "rejected"
+      : sessionStatus === "qualified" || sessionStatus === "completed"
+        ? "qualified"
+        : "in_progress";
+
   if (sessionId) {
     try {
       const db = createServiceClient();
-      const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
+      const lastUserMsg = [...messages]
+        .reverse()
+        .find((m) => m.role === "user");
 
       await db.from("sessions").upsert(
         {
           id: sessionId,
           listing_title: title,
-          status: sessionStatus === "rejected" ? "rejected"
-            : sessionStatus === "qualified" ? "qualified"
-            : "in_progress",
+          status: dbStatus,
           answers: mergedAnswers,
           message_count: messages.length + 1,
           property_id: propertyId,
@@ -226,7 +390,11 @@ export async function POST(req: Request) {
 
       const toInsert = [];
       if (lastUserMsg) {
-        toInsert.push({ session_id: sessionId, role: "user", content: lastUserMsg.content });
+        toInsert.push({
+          session_id: sessionId,
+          role: "user",
+          content: lastUserMsg.content,
+        });
       }
       toInsert.push({
         session_id: sessionId,
@@ -240,5 +408,10 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ reply, extracted, sessionStatus });
+  return NextResponse.json({
+    reply,
+    extracted,
+    sessionStatus,
+    offTopicWarning,
+  });
 }
