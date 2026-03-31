@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useId } from "react";
+import { useState, useEffect, useRef, useId } from "react";
 import type { LandlordField } from "@/lib/landlord-field";
 import {
   OPERATORS_BY_KIND,
@@ -17,7 +17,7 @@ function generateId() {
 
 function emptyRule(fields: LandlordField[]): RuleWithKey {
   const firstField = fields[0];
-  const kind = firstField?.valueKind ?? "text";
+  const kind = firstField?.value_kind ?? "text";
   return {
     _key: generateId(),
     id: generateId(),
@@ -51,7 +51,7 @@ function RuleRow({
   const uid = useId();
   const field = fields.find((f) => f.id === rule.fieldId);
   const error = rule.fieldId ? validateRule(rule, fields) : null;
-  const operators = field ? OPERATORS_BY_KIND[field.valueKind] : ["=="];
+  const operators = field ? (OPERATORS_BY_KIND[field.value_kind] ?? ["=="]) : ["=="];
 
   function handleFieldChange(fieldId: string) {
     const f = fields.find((x) => x.id === fieldId);
@@ -59,8 +59,8 @@ function RuleRow({
     onChange({
       ...rule,
       fieldId,
-      operator: defaultOperatorForKind(f.valueKind),
-      value: defaultValueForKind(f.valueKind),
+      operator: defaultOperatorForKind(f.value_kind),
+      value: defaultValueForKind(f.value_kind),
     });
   }
 
@@ -152,7 +152,7 @@ function RuleRow({
             <label htmlFor={`${uid}-val`} className="text-xs text-foreground/50">
               Value
             </label>
-            {field?.valueKind === "boolean" ? (
+            {field?.value_kind === "boolean" ? (
               <select
                 id={`${uid}-val`}
                 value={rule.value}
@@ -162,7 +162,7 @@ function RuleRow({
                 <option value="true">Yes</option>
                 <option value="false">No</option>
               </select>
-            ) : field?.valueKind === "enum" ? (
+            ) : field?.value_kind === "enum" ? (
               <select
                 id={`${uid}-val`}
                 value={rule.value}
@@ -179,10 +179,10 @@ function RuleRow({
             ) : (
               <input
                 id={`${uid}-val`}
-                type={field?.valueKind === "number" ? "number" : field?.valueKind === "date" ? "date" : "text"}
+                type={field?.value_kind === "number" ? "number" : field?.value_kind === "date" ? "date" : "text"}
                 value={rule.value}
                 onChange={(e) => onChange({ ...rule, value: e.target.value })}
-                placeholder={field?.valueKind === "number" ? "0" : "value"}
+                placeholder={field?.value_kind === "number" ? "0" : "value"}
                 className="w-32 rounded-lg border border-foreground/10 bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-foreground/35 focus:border-foreground/25 focus:outline-none focus:ring-1 focus:ring-foreground/15"
               />
             )}
@@ -225,17 +225,28 @@ export default function RulesSection({
   fields: LandlordField[];
   onChange: (rules: LandlordRule[]) => void;
 }) {
+  function fingerprint(r: LandlordRule[]) {
+    return r.map((x) => x.id).join("\0") + "\0" + r.length;
+  }
+
   const [rows, setRows] = useState<RuleWithKey[]>(() =>
     rules.map((r) => ({ ...r, _key: generateId() })),
   );
+  const sigRef = useRef(fingerprint(rules));
 
   useEffect(() => {
-    setRows(rules.map((r) => ({ ...r, _key: generateId() })));
+    const sig = fingerprint(rules);
+    if (sig !== sigRef.current) {
+      sigRef.current = sig;
+      setRows(rules.map((r) => ({ ...r, _key: generateId() })));
+    }
   }, [rules]);
 
   function update(next: RuleWithKey[]) {
     setRows(next);
-    onChange(next.map(({ _key: _, ...r }) => r));
+    const plain = next.map(({ _key: _, ...r }) => r);
+    sigRef.current = fingerprint(plain);
+    onChange(plain);
   }
 
   function handleChange(index: number, updated: RuleWithKey) {

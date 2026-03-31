@@ -10,24 +10,24 @@ import { callClaude, ClaudeApiError, extractText, stripCodeFences } from "@/lib/
 function buildSystemPrompt(fields: LandlordField[]): string {
   const fieldDescriptions = fields
     .filter((f) => {
-      if (!OPERATORS_BY_KIND[f.valueKind]) {
-        console.warn(`[generate-rules] skipping field "${f.id}" with unknown valueKind "${f.valueKind}"`);
+      if (!OPERATORS_BY_KIND[f.value_kind]) {
+        console.warn(`[generate-rules] skipping field "${f.id}" with unknown value_kind "${f.value_kind}"`);
         return false;
       }
       return true;
     })
     .map((f) => {
-      const base = `  - id: "${f.id}", valueKind: "${f.valueKind}", label: "${f.label}"`;
-      const ops = OPERATORS_BY_KIND[f.valueKind].join(", ");
+      const base = `  - id: "${f.id}", value_kind: "${f.value_kind}", label: "${f.label}"`;
+      const ops = OPERATORS_BY_KIND[f.value_kind].join(", ");
       const opLine = `    valid operators: [${ops}]`;
       const valLine =
-        f.valueKind === "boolean"
+        f.value_kind === "boolean"
           ? `    valid values: "true" or "false"`
-          : f.valueKind === "enum" && f.options?.length
+          : f.value_kind === "enum" && f.options?.length
             ? `    valid values: ${JSON.stringify(f.options)}`
-            : f.valueKind === "number"
+            : f.value_kind === "number"
               ? `    valid values: numeric strings e.g. "3000"`
-              : f.valueKind === "date"
+              : f.value_kind === "date"
                 ? `    valid values: ISO date strings e.g. "2025-01-01"`
                 : `    valid values: any string`;
       return [base, opLine, valLine].join("\n");
@@ -46,11 +46,11 @@ Return ONLY a valid JSON array — no explanation, no markdown, no code fences. 
 Available fields:
 ${fieldDescriptions}
 
-Rules:
-- Only generate rules that can be directly inferred from the property description.
-- Do not invent constraints not mentioned or implied in the description.
-- You may generate multiple rules for the same field (e.g. income >= X and income <= Y).
-- Return an empty array if no clear eligibility constraints are implied.
+STRICT RULES:
+- ONLY generate rules for constraints explicitly stated in the property description (e.g. "no pets", "minimum income $3000", "no smoking").
+- Do NOT invent or assume constraints that are not mentioned. If the description doesn't set a threshold, don't create one.
+- You may generate multiple rules for the same field if the description specifies a range (e.g. income >= X and income <= Y).
+- Return an empty array [] if the description contains no explicit eligibility constraints.
 
 Example output:
 [

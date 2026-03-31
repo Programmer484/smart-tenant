@@ -27,12 +27,13 @@ export type LandlordRule = {
   /** References a LandlordField id */
   fieldId: string;
   operator: string;
-  /** Stored as string; interpreted at runtime based on field's valueKind */
+  /** Stored as string; interpreted at runtime based on field's value_kind */
   value: string;
 };
 
 export function defaultOperatorForKind(kind: FieldValueKind): string {
-  return OPERATORS_BY_KIND[kind][0];
+  // Defensive: stale DB/user data may contain unknown value_kind values at runtime.
+  return OPERATORS_BY_KIND[kind]?.[0] ?? "==";
 }
 
 export function defaultValueForKind(kind: FieldValueKind): string {
@@ -47,13 +48,14 @@ export function validateRule(
   if (!rule.fieldId) return "Select a field";
   const field = fields.find((f) => f.id === rule.fieldId);
   if (!field) return "Field not found";
-  const ops = OPERATORS_BY_KIND[field.valueKind];
+  const ops = OPERATORS_BY_KIND[field.value_kind];
+  if (!ops) return `Invalid field type "${field.value_kind}"`;
   if (!ops.includes(rule.operator)) return "Invalid operator for this field type";
   if (!rule.value.trim()) return "Value is required";
-  if (field.valueKind === "number" && isNaN(Number(rule.value))) {
+  if (field.value_kind === "number" && isNaN(Number(rule.value))) {
     return "Value must be a number";
   }
-  if (field.valueKind === "enum" && field.options && !field.options.includes(rule.value)) {
+  if (field.value_kind === "enum" && field.options && !field.options.includes(rule.value)) {
     return "Value must be one of the allowed options";
   }
   return null;

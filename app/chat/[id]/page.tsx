@@ -63,7 +63,7 @@ export default function ChatPage() {
   const supabase = createClient();
 
   const [config, setConfig] = useState<ChatConfig | null>(null);
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [input, setInput] = useState("");
@@ -76,13 +76,27 @@ export default function ChatPage() {
   const [rejected, setRejected] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [qualified, setQualified] = useState(false);
-  const [offTopicCount, setOffTopicCount] = useState(0);
   const [qualifiedFollowUpCount, setQualifiedFollowUpCount] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const inputDisabled = rejected || completed;
+
+  function cookieName(pid: string) {
+    return `st_session_${pid}`;
+  }
+
+  function getCookie(name: string): string | null {
+    const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return m ? decodeURIComponent(m[1] ?? "") : null;
+  }
+
+  function setCookie(name: string, value: string) {
+    const maxAgeDays = 7;
+    const maxAge = maxAgeDays * 24 * 60 * 60;
+    document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax`;
+  }
 
   useEffect(() => {
     async function load() {
@@ -116,7 +130,43 @@ export default function ChatPage() {
         aiInstructions: resolveAiInstructions(p.ai_instructions),
       };
       setConfig(cfg);
-      setMessages([{ id: "init", role: "assistant", text: firstGreeting(intro, fields) }]);
+
+      // Cookie-based session id (resume on refresh, same browser/device)
+      const cn = cookieName(propertyId);
+      const existing = getCookie(cn);
+      const sid = existing && existing.length > 10 ? existing : crypto.randomUUID();
+      if (!existing) setCookie(cn, sid);
+      setSessionId(sid);
+
+      // Restore prior state (server reads cookie + uses service role)
+      try {
+        const res = await fetch(`/api/session?propertyId=${encodeURIComponent(propertyId)}`);
+        if (res.ok) {
+          const data = (await res.json()) as {
+            answers?: Record<string, string>;
+            messages?: { role: "user" | "assistant"; content: string }[];
+            status?: string;
+          };
+
+          setAnswers(data.answers ?? {});
+          const restored = (data.messages ?? []).map((m) => ({
+            id: generateId(),
+            role: m.role,
+            text: m.content,
+          }));
+          setMessages([
+            { id: "init", role: "assistant", text: firstGreeting(intro, fields) },
+            ...restored,
+          ]);
+
+          if (data.status === "rejected") setRejected(true);
+          if (data.status === "qualified") setQualified(true);
+        } else {
+          setMessages([{ id: "init", role: "assistant", text: firstGreeting(intro, fields) }]);
+        }
+      } catch {
+        setMessages([{ id: "init", role: "assistant", text: firstGreeting(intro, fields) }]);
+      }
     }
     void load();
   }, [propertyId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -127,7 +177,7 @@ export default function ChatPage() {
 
   async function send() {
     const text = input.trim();
-    if (!text || sending || !config || inputDisabled) return;
+    if (!text || sending || !config || inputDisabled || !sessionId) return;
 
     const userMsg: Message = { id: generateId(), role: "user", text };
     const nextMessages = [...messages, userMsg];
@@ -148,6 +198,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           title: config.title,
           description: config.description,
+          propertyInfo: config.propertyInfo,
           fields: config.fields,
           rules: config.rules,
           aiInstructions: config.aiInstructions,
@@ -156,7 +207,6 @@ export default function ChatPage() {
           sessionId,
           propertyId: config.id,
           clarificationPending,
-          offTopicCount,
           qualifiedFollowUpCount,
           isQualified: qualified,
         }),
@@ -176,7 +226,6 @@ export default function ChatPage() {
         reply?: string;
         extracted?: Extraction[];
         sessionStatus?: string;
-        offTopicWarning?: boolean;
       };
 
       const extracted = data.extracted ?? [];
@@ -217,9 +266,6 @@ export default function ChatPage() {
         setClarificationPending(false);
       }
 
-      if (data.offTopicWarning) {
-        setOffTopicCount((c) => c + 1);
-      }
     } catch {
       setMessages((prev) => [
         ...prev,

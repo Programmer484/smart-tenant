@@ -19,15 +19,7 @@ export default function SharedFieldsPage() {
         .select("*")
         .order("sort_order");
 
-      const mapped: LandlordField[] = (data ?? []).map((r: Record<string, unknown>) => ({
-        id: r.id as string,
-        label: r.label as string,
-        valueKind: r.value_kind as LandlordField["valueKind"],
-        required: r.required as boolean,
-        collectHint: (r.collect_hint as string | undefined) ?? undefined,
-        options: (r.options as string[] | null) ?? undefined,
-      }));
-      setFields(mapped);
+      setFields((data ?? []) as LandlordField[]);
       setLoading(false);
     }
     void load();
@@ -43,9 +35,8 @@ export default function SharedFieldsPage() {
         id: f.id,
         user_id: user.id,
         label: f.label,
-        value_kind: f.valueKind,
-        required: f.required,
-        collect_hint: f.collectHint ?? null,
+        value_kind: f.value_kind,
+        collect_hint: f.collect_hint ?? null,
         options: f.options ?? null,
         sort_order: i,
       }));

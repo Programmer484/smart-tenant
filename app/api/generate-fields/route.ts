@@ -9,23 +9,19 @@ import {
 } from "@/lib/landlord-field";
 import { callClaude, ClaudeApiError, extractText, stripCodeFences } from "@/lib/anthropic";
 
-const SYSTEM_PROMPT = `You are a rental application assistant. Given a property description, generate a list of applicant screening fields the landlord should collect.
+const SYSTEM_PROMPT = `You are a rental application assistant. Given a property description, generate screening fields ONLY for topics explicitly mentioned or clearly implied in the description.
+
+STRICT RULE: Do NOT invent fields for common rental topics (income, pets, smoking, employment, etc.) unless the description actually mentions them. If the description says nothing about pets, do not add a pets field. If it says nothing about income, do not add an income field.
 
 Return ONLY a valid JSON array — no explanation, no markdown, no code fences. Each element must have:
   - "id": snake_case identifier (letters, digits, underscores; must start with a letter)
   - "label": a clear question to ask the applicant (string)
-  - "valueKind": one of ${JSON.stringify(FIELD_VALUE_KINDS)}
-  - "required": true or false
-  - If valueKind is "enum", include "options": an array of at least 2 distinct choice strings (labels shown to applicants)
+  - "value_kind": one of ${JSON.stringify(FIELD_VALUE_KINDS)}
+  - If value_kind is "enum", include "options": an array of at least 2 distinct choice strings
 
-Example output:
-[
-  { "id": "credit_score", "label": "What is your current credit score?", "valueKind": "number", "required": true },
-  { "id": "has_pets", "label": "Do you have pets?", "valueKind": "boolean", "required": true },
-  { "id": "employment_type", "label": "What best describes your employment?", "valueKind": "enum", "required": true, "options": ["Full-time", "Part-time", "Self-employed", "Student / other"] }
-]
+Example: if the description says "no pets allowed, minimum income $3000/month", generate fields for pets and income — nothing else.
 
-Only include fields that are directly relevant to evaluating the applicant for this specific property.`;
+Return an empty array [] if the description contains no screening-relevant details.`;
 
 function parseGeneratedField(v: unknown): LandlordField | null {
   if (typeof v !== "object" || v === null) return null;
@@ -38,17 +34,16 @@ function parseGeneratedField(v: unknown): LandlordField | null {
   ) {
     return null;
   }
-  const valueKind = f.valueKind as LandlordField["valueKind"];
-  if (!FIELD_VALUE_KINDS.includes(valueKind)) return null;
+  const value_kind = f.value_kind as LandlordField["value_kind"];
+  if (!FIELD_VALUE_KINDS.includes(value_kind)) return null;
 
   const out: LandlordField = {
     id: f.id,
     label: f.label,
-    valueKind,
-    required: typeof f.required === "boolean" ? f.required : true,
+    value_kind,
   };
 
-  if (valueKind === "enum") {
+  if (value_kind === "enum") {
     if (!Array.isArray(f.options)) return null;
     const rawOpts = f.options
       .filter((x) => typeof x === "string")

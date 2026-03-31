@@ -15,10 +15,9 @@ export type FieldValueKind = (typeof FIELD_VALUE_KINDS)[number];
 export type LandlordField = {
   id: string;
   label: string;
-  valueKind: FieldValueKind;
-  required?: boolean;
-  collectHint?: string;
-  /** Required when valueKind is "enum": allowed choices for the applicant */
+  value_kind: FieldValueKind;
+  collect_hint?: string;
+  /** Required when value_kind is "enum": allowed choices for the applicant */
   options?: string[];
 };
 

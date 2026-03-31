@@ -10,19 +10,15 @@ import { callClaude, ClaudeApiError } from "@/lib/anthropic";
 type IncomingMessage = { role: "user" | "assistant"; content: string };
 type Extraction = { fieldId: string; value: string };
 
-// ─── Tool definition ────────────────────────────────────────────────
+// ─── Tool definitions ───────────────────────────────────────────────
 
-const SCREEN_RESPONSE_TOOL = {
-  name: "screen_response",
+const EXTRACT_TOOL = {
+  name: "extract_fields",
   description:
-    "Respond to the applicant and extract any screening field values from their message.",
+    "Extract screening field values from the applicant's message and classify relevance.",
   input_schema: {
     type: "object" as const,
     properties: {
-      reply: {
-        type: "string",
-        description: "Your conversational message to the applicant.",
-      },
       extracted: {
         type: "array",
         description:
@@ -42,7 +38,28 @@ const SCREEN_RESPONSE_TOOL = {
           "true if the message is a screening answer OR a property question. false if completely off-topic.",
       },
     },
-    required: ["reply", "extracted", "message_relevant"],
+    required: ["extracted", "message_relevant"],
+  },
+};
+
+const RESPOND_TOOL = {
+  name: "screen_response",
+  description:
+    "Write a conversational reply to the applicant based on the current screening state.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      reply: {
+        type: "string",
+        description: "Your conversational message to the applicant.",
+      },
+      end_conversation: {
+        type: "boolean",
+        description:
+          "true if the conversation should end — e.g. the applicant refuses to provide required info, is uncooperative, or the conversation clearly isn't progressing. Your reply should be a polite closing message.",
+      },
+    },
+    required: ["reply", "end_conversation"],
   },
 };
 
@@ -76,6 +93,7 @@ function isValidExtraction(
 function buildSystemPrompt(
   title: string,
   description: string,
+  propertyInfo: string,
   fields: LandlordField[],
   rules: LandlordRule[],
   answers: Record<string, string>,
@@ -96,9 +114,9 @@ function buildSystemPrompt(
     unanswered.length > 0
       ? unanswered
           .map((f) => {
-            let line = `  - ${f.label} (${f.id}), type: ${f.valueKind}`;
+            let line = `  - ${f.label} (${f.id}), type: ${f.value_kind}`;
             if (f.options?.length) line += `, options: ${f.options.join(", ")}`;
-            if (f.collectHint) line += ` [hint: ${f.collectHint}]`;
+            if (f.collect_hint) line += ` [hint: ${f.collect_hint}]`;
             return line;
           })
           .join("\n")
@@ -123,15 +141,19 @@ function buildSystemPrompt(
 
   const groundingInstruction =
     ai.unknownInfoBehavior === "ignore"
-      ? "Do not answer questions about details not covered in the description above. Redirect the applicant back to the screening questions."
-      : "Only answer property questions using the description above. If the information is not there, say you don't have that detail and suggest contacting the landlord. Never invent details.";
+      ? "Do not answer questions about details not covered above. Redirect the applicant back to the screening questions."
+      : "Only answer property questions using the property description and applicant-facing summary above. If the information is not there, say you don't have that detail and suggest contacting the landlord. Never invent details.";
+
+  const infoBlock = propertyInfo
+    ? `\n\nAPPLICANT-FACING SUMMARY (the applicant can see this):\n${propertyInfo}`
+    : "";
 
   let prompt = `You are a warm and professional rental screening assistant for the following property.
 
 Property: ${title}
 ---
 ${description}
----
+---${infoBlock}
 
 ELIGIBILITY REQUIREMENTS:
 ${rulesBlock}
@@ -144,10 +166,18 @@ ${unansweredBlock}
 
 YOUR JOB:
 1. ${groundingInstruction}
-2. You MUST extract ALL values from the applicant's message that match fields in the STILL NEED list. Never skip an extraction, even if you also plan to ask a follow-up. Values should be plain strings: numbers like "3500", booleans as "true" or "false".
+2. Extract ALL screening values from the applicant's message — for BOTH unanswered fields AND corrections to already-collected fields. If the applicant contradicts a previous answer (e.g. changes "no pets" to "I have a bird"), you MUST extract the updated value. Values should be plain strings: numbers like "3500", booleans as "true" or "false".
 3. ${nextInstruction}
 
-Keep your reply concise and conversational. One question at a time.`;
+Keep your reply concise and conversational. One question at a time.
+
+ENDING CONVERSATIONS:
+Set end_conversation to true when the conversation is no longer productive:
+- The applicant repeatedly refuses to provide required information after being asked 2+ times.
+- The applicant is clearly uncooperative, trolling, or not genuinely applying.
+- The conversation has stalled and isn't making progress toward completing the screening.
+When ending, your closing message MUST include the specific reason why the conversation is being closed (e.g. "because we weren't able to collect the required information" or "because the property requires no pets"). Then thank them for their time and let them know they can start a new conversation if they change their mind.
+In all other cases, set end_conversation to false.`;
 
   if (ai.style) {
     prompt += `\n\nLANDLORD STYLE INSTRUCTIONS:\n${ai.style}`;
@@ -193,6 +223,8 @@ export async function POST(req: Request) {
     typeof rec.title === "string" ? rec.title.trim() : "Rental Property";
   const description =
     typeof rec.description === "string" ? rec.description.trim() : "";
+  const propertyInfo =
+    typeof rec.propertyInfo === "string" ? rec.propertyInfo.trim() : "";
   const fields = Array.isArray(rec.fields)
     ? (rec.fields as LandlordField[])
     : [];
@@ -228,17 +260,19 @@ export async function POST(req: Request) {
     );
   }
 
-  // ── Call Claude with tool use ──
+  // ── PHASE 1: Extract fields ──
 
-  const system = buildSystemPrompt(title, description, fields, rules, answers, ai);
+  const extractSystem = buildSystemPrompt(
+    title, description, propertyInfo, fields, rules, answers, ai,
+  );
 
-  let data;
+  let extractData;
   try {
-    data = await callClaude(key, {
-      system,
+    extractData = await callClaude(key, {
+      system: extractSystem + "\n\nYour only job right now is to extract field values from the applicant's latest message. Do not write a reply.",
       messages,
-      tools: [SCREEN_RESPONSE_TOOL],
-      tool_choice: { type: "tool", name: "screen_response" },
+      tools: [EXTRACT_TOOL],
+      tool_choice: { type: "tool", name: "extract_fields" },
     });
   } catch (err) {
     if (err instanceof ClaudeApiError) {
@@ -247,16 +281,14 @@ export async function POST(req: Request) {
     throw err;
   }
 
-  const toolBlock = data.content?.find((b) => b.type === "tool_use");
-  const input = toolBlock?.input as {
-    reply?: string;
+  const extractBlock = extractData.content?.find((b) => b.type === "tool_use");
+  const extractInput = extractBlock?.input as {
     extracted?: Extraction[];
     message_relevant?: boolean;
   } | undefined;
 
-  let reply = input?.reply ?? "I'm sorry, something went wrong. Could you try again?";
-  const rawExtracted = Array.isArray(input?.extracted) ? input.extracted : [];
-  const messageRelevant = input?.message_relevant !== false;
+  const rawExtracted = Array.isArray(extractInput?.extracted) ? extractInput.extracted : [];
+  const messageRelevant = extractInput?.message_relevant !== false;
 
   // ── Validate extractions ──
 
@@ -264,10 +296,9 @@ export async function POST(req: Request) {
   for (const ex of rawExtracted) {
     const field = fields.find((f) => f.id === ex.fieldId);
     if (!field) continue;
-    if (answers[ex.fieldId] !== undefined) continue;
-    if (!isValidExtraction(ex.value, field.valueKind, field.options)) {
+    if (!isValidExtraction(ex.value, field.value_kind, field.options)) {
       console.warn(
-        `[chat] Dropped invalid extraction: ${ex.fieldId}="${ex.value}" (expected ${field.valueKind})`,
+        `[chat] Dropped invalid extraction: ${ex.fieldId}="${ex.value}" (expected ${field.value_kind})`,
       );
       continue;
     }
@@ -295,22 +326,20 @@ export async function POST(req: Request) {
     | "rejected"
     | "qualified"
     | "completed" = "in_progress";
-  let offTopicWarning = false;
 
-  // 1. Rule violation system (two-strike, independent of off-topic)
+  // Build context for the response call based on rule evaluation
+  let responseContext = "";
+
   if (firstViolation) {
-    const requirement = describeViolation(firstViolation);
-
+    const req = describeViolation(firstViolation);
     if (clarificationPending) {
       sessionStatus = "rejected";
-      reply = `Thank you for taking the time to apply. Unfortunately, we're unable to move forward with your application for this property. The reason is that ${requirement}. We wish you the best in your search.`;
+      responseContext = `\n\nIMPORTANT — REJECTION:\nThe applicant still doesn't meet this requirement: ${req}. They were already given a chance to clarify. Kindly let them know you can't move forward — state the specific reason and wish them well.`;
     } else {
       sessionStatus = "clarifying";
-      reply = `Based on your response, you may not meet our requirement for this property: ${requirement}. If this is incorrect, please let us know now.`;
+      responseContext = `\n\nIMPORTANT — ELIGIBILITY CONCERN:\nThe applicant's answer doesn't meet this requirement: ${req}. Gently let them know about the issue and give them a chance to correct themselves. Describe the requirement in natural, human-friendly language.`;
     }
-  }
-  // 2. Qualified phase
-  else if (isQualified || (!firstViolation && allCollected)) {
+  } else if (isQualified || allCollected) {
     const followUps = qualifiedFollowUpCount + (isQualified ? 1 : 0);
     const limit = ai.qualifiedFollowUps;
 
@@ -320,24 +349,44 @@ export async function POST(req: Request) {
       (!messageRelevant && isQualified)
     ) {
       sessionStatus = "completed";
-      reply =
-        "Thank you for your interest! Your application is complete and will be reviewed shortly. We'll be in touch. Good luck!";
     } else {
       sessionStatus = "qualified";
     }
   }
-  // 3. Off-topic system (independent of rules)
-  else if (!messageRelevant) {
-    const newCount = offTopicCount + 1;
-    const limit = ai.offTopicLimit;
 
-    if (limit > 0 && newCount >= limit) {
-      sessionStatus = "rejected";
-      reply =
-        "It seems like you may not be interested in proceeding with this application. We're going to close this session. If you'd like to apply in the future, feel free to start a new conversation.";
-    } else {
-      offTopicWarning = true;
+  // ── PHASE 2: Generate response (with full context) ──
+
+  const respondSystem = buildSystemPrompt(
+    title, description, propertyInfo, fields, rules, mergedAnswers, ai,
+  ) + responseContext;
+
+  let respondData;
+  try {
+    respondData = await callClaude(key, {
+      system: respondSystem,
+      messages,
+      tools: [RESPOND_TOOL],
+      tool_choice: { type: "tool", name: "screen_response" },
+    });
+  } catch (err) {
+    if (err instanceof ClaudeApiError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
     }
+    throw err;
+  }
+
+  const respondBlock = respondData.content?.find((b) => b.type === "tool_use");
+  const respondInput = respondBlock?.input as {
+    reply?: string;
+    end_conversation?: boolean;
+  } | undefined;
+
+  const reply = respondInput?.reply ?? "I'm sorry, something went wrong. Could you try again?";
+  const endConversation = respondInput?.end_conversation === true;
+
+  // AI-driven end_conversation overrides status
+  if (endConversation && sessionStatus === "in_progress") {
+    sessionStatus = "rejected";
   }
 
   // ── Persist to Supabase (best-effort) ──
@@ -393,6 +442,5 @@ export async function POST(req: Request) {
     reply,
     extracted,
     sessionStatus,
-    offTopicWarning,
   });
 }

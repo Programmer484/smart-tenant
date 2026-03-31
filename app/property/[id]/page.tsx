@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import type { PropertyRecord, SharedFieldRecord, ListingLink, AiInstructions } from "@/lib/property";
+import type { PropertyRecord, ListingLink, AiInstructions } from "@/lib/property";
 import { DEFAULT_AI_INSTRUCTIONS, resolveAiInstructions, defaultIntroMessage } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
@@ -15,17 +15,9 @@ const TABS = ["Questions", "Rules", "Property Info", "Messages", "Links", "AI Be
 
 type Tab = (typeof TABS)[number];
 
-// ─── Shared-fields picker ──────────────────────────────────────────────────
+// ─── Shared-fields list (read-only, always active for all properties) ────────
 
-function SharedFieldsPicker({
-  allShared,
-  selectedIds,
-  onChange,
-}: {
-  allShared: LandlordField[];
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-}) {
+function SharedFieldsList({ allShared }: { allShared: LandlordField[] }) {
   if (allShared.length === 0) {
     return (
       <p className="text-sm text-foreground/40">
@@ -37,30 +29,16 @@ function SharedFieldsPicker({
     );
   }
 
-  function toggle(id: string) {
-    onChange(
-      selectedIds.includes(id)
-        ? selectedIds.filter((x) => x !== id)
-        : [...selectedIds, id],
-    );
-  }
-
   return (
     <div className="space-y-2">
       {allShared.map((f) => (
-        <label
+        <div
           key={f.id}
-          className="flex cursor-pointer items-center gap-3 rounded-lg border border-foreground/10 bg-white px-3 py-2.5 transition-colors hover:bg-foreground/[0.02]"
+          className="flex items-center gap-3 rounded-lg border border-foreground/10 bg-white px-3 py-2.5"
         >
-          <input
-            type="checkbox"
-            checked={selectedIds.includes(f.id)}
-            onChange={() => toggle(f.id)}
-            className="h-4 w-4 rounded accent-teal-700"
-          />
           <span className="flex-1 text-sm text-foreground/80">{f.label}</span>
-          <span className="text-[11px] text-foreground/35">{f.valueKind}</span>
-        </label>
+          <span className="text-[11px] text-foreground/35">{f.value_kind}</span>
+        </div>
       ))}
     </div>
   );
@@ -78,7 +56,6 @@ export default function PropertySetupPage() {
   const [description, setDescription] = useState("");
   const [propertyInfo, setPropertyInfo] = useState("");
   const [introMessage, setIntroMessage] = useState("");
-  const [sharedFieldIds, setSharedFieldIds] = useState<string[]>([]);
   const [ownFields, setOwnFields] = useState<LandlordField[]>([]);
   const [rules, setRules] = useState<LandlordRule[]>([]);
   const [links, setLinks] = useState<ListingLink[]>([]);
@@ -113,15 +90,13 @@ export default function PropertySetupPage() {
       setDescription(p.description);
       setPropertyInfo(p.property_info);
       setIntroMessage(p.intro_message);
-      setSharedFieldIds(p.shared_field_ids ?? []);
       setOwnFields(p.own_fields ?? []);
       setRules(p.rules ?? []);
       setLinks(p.links ?? []);
       setAiInstructions(resolveAiInstructions(p.ai_instructions));
       setStatus(p.status);
 
-      const shared = (sharedRes.data as SharedFieldRecord[] | null) ?? [];
-      setAllShared(shared);
+      setAllShared((sharedRes.data ?? []) as LandlordField[]);
       setPageLoading(false);
     }
     void load();
@@ -138,7 +113,6 @@ export default function PropertySetupPage() {
           description: description.trim(),
           property_info: propertyInfo,
           intro_message: introMessage,
-          shared_field_ids: sharedFieldIds,
           own_fields: ownFields,
           rules,
           links: links.filter((l) => l.label.trim() && l.url.trim()),
@@ -151,38 +125,59 @@ export default function PropertySetupPage() {
       setSaving(false);
       if (error) console.error("[save]", error);
     },
-    [id, title, description, propertyInfo, introMessage, sharedFieldIds, ownFields, rules, links, aiInstructions, status, supabase], // eslint-disable-line react-hooks/exhaustive-deps
+    [id, title, description, propertyInfo, introMessage, ownFields, rules, links, aiInstructions, status, supabase], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
   function defaultIntro() {
     return defaultIntroMessage(title.trim());
   }
 
-  // ── Two-pass generation ────────────────────────────────────────────────
+  // ── Convert property-specific → shared ──────────────────────────────
+
+  async function makeShared(field: LandlordField) {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const nextSort = allShared.length;
+    const row = {
+      id: field.id,
+      user_id: user.id,
+      label: field.label,
+      value_kind: field.value_kind,
+      collect_hint: field.collect_hint ?? null,
+      options: field.options ?? null,
+      sort_order: nextSort,
+    };
+
+    const { error } = await supabase.from("shared_fields").upsert(row, { onConflict: "user_id,id" });
+    if (error) { console.error("[make-shared]", error); return; }
+
+    setOwnFields((prev) => prev.filter((f) => f.id !== field.id));
+    setAllShared((prev) => prev.some((f) => f.id === field.id) ? prev : [...prev, field]);
+  }
+
+  // ── Three-pass generation ───────────────────────────────────────────────
 
   async function handleGenerate() {
     if (!description.trim()) return;
     try {
+      // Pass 1: generate property-specific questions (excluding shared topics)
       setLoadingPhase("fields");
       const fieldsRes = await fetch("/api/generate-fields", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description,
-          excludeLabels: allShared
-            .filter((f) => sharedFieldIds.includes(f.id))
-            .map((f) => f.label),
+          excludeLabels: allShared.map((f) => f.label),
         }),
       });
       const fieldsData = (await fieldsRes.json()) as { fields?: LandlordField[] };
       const newFields = fieldsData.fields ?? [];
       setOwnFields(newFields);
 
+      // Pass 2: generate rules from all questions (shared + new)
       setLoadingPhase("rules");
-      const resolvedFields = [
-        ...allShared.filter((f) => sharedFieldIds.includes(f.id)),
-        ...newFields,
-      ];
+      const resolvedFields = [...allShared, ...newFields];
       const rulesRes = await fetch("/api/generate-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -235,11 +230,10 @@ export default function PropertySetupPage() {
     );
   }
 
-  const resolvedFieldCount = sharedFieldIds.length + ownFields.length;
-  const allResolvedFields = [
-    ...allShared.filter((f) => sharedFieldIds.includes(f.id)),
-    ...ownFields,
-  ];
+  const allResolvedFields = [...allShared, ...ownFields].filter(
+    (f, i, arr) => arr.findIndex((x) => x.id === f.id) === i,
+  );
+  const resolvedFieldCount = allResolvedFields.length;
 
   return (
     <div className="min-h-screen bg-[#f7f9f8]">
@@ -339,27 +333,23 @@ export default function PropertySetupPage() {
 
           {activeTab === "Questions" && (
             <div className="space-y-8">
-              {/* Shared questions */}
+              {/* Shared questions (always active) */}
               <div>
                 <div className="mb-3 flex items-center justify-between">
                   <div>
                     <h3 className="text-sm font-medium text-foreground/80">Shared questions</h3>
                     <p className="text-xs text-foreground/40">
-                      Included across multiple properties.{" "}
+                      Active across all properties.{" "}
                       <Link href="/shared-fields" className="text-teal-700 hover:underline">
-                        Manage pool →
+                        Manage →
                       </Link>
                     </p>
                   </div>
                   <span className="text-xs text-foreground/40">
-                    {sharedFieldIds.length} selected
+                    {allShared.length} questions
                   </span>
                 </div>
-                <SharedFieldsPicker
-                  allShared={allShared}
-                  selectedIds={sharedFieldIds}
-                  onChange={setSharedFieldIds}
-                />
+                <SharedFieldsList allShared={allShared} />
               </div>
 
               <div className="border-t border-foreground/8 pt-8">
@@ -369,7 +359,30 @@ export default function PropertySetupPage() {
                     Unique to this listing. AI will not generate duplicates of shared questions.
                   </p>
                 </div>
-                <LandlordFieldsSection fields={ownFields} onChange={setOwnFields} />
+                <LandlordFieldsSection
+                  fields={ownFields}
+                  onChange={setOwnFields}
+                  onBeforeDelete={(field) => {
+                    const linked = rules.filter((r) => r.fieldId === field.id);
+                    if (linked.length === 0) return true;
+                    const names = linked.map((r) => `${field.label} ${r.operator} ${r.value}`).join("\n  • ");
+                    if (!confirm(`Deleting "${field.label}" will also remove ${linked.length} rule(s):\n  • ${names}\n\nProceed?`)) {
+                      return false;
+                    }
+                    setRules((prev) => prev.filter((r) => r.fieldId !== field.id));
+                    return true;
+                  }}
+                  fieldAction={(field) => (
+                    <button
+                      type="button"
+                      onClick={() => void makeShared(field)}
+                      title="Move to shared pool and select for this property"
+                      className="whitespace-nowrap text-[11px] text-foreground/30 hover:text-teal-700"
+                    >
+                      → shared
+                    </button>
+                  )}
+                />
               </div>
             </div>
           )}

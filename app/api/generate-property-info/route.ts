@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { callClaude, ClaudeApiError, extractText } from "@/lib/anthropic";
 
-const SYSTEM = `You write applicant-facing property summaries for rental listings.
+const SYSTEM = `Rewrite the landlord's raw notes into a clean, applicant-facing summary.
 
-Given the landlord's raw notes, produce a clean, friendly 2–4 paragraph summary that:
-- Highlights key features, location, and amenities
-- Mentions notable requirements or restrictions (pets, smoking, income) in a neutral tone
-- Feels welcoming without being salesy
-- Omits internal screening logic or exact rule thresholds
+Rules:
+- Use ONLY information explicitly stated in the notes. Do not add, infer, or embellish any details.
+- If the notes are sparse, keep the summary short. Never pad with generic filler.
+- Omit internal screening logic or exact rule thresholds.
+- Tone: neutral, welcoming, concise.
 
 Return only the summary text — no JSON, no markdown headings.`;
 

@@ -12,9 +12,9 @@ function satisfies(
   actual: string,
   operator: string,
   target: string,
-  valueKind: LandlordField["valueKind"],
+  value_kind: LandlordField["value_kind"],
 ): boolean {
-  if (valueKind === "number") {
+  if (value_kind === "number") {
     const a = Number(actual);
     const t = Number(target);
     if (isNaN(a) || isNaN(t)) return true;
@@ -28,7 +28,7 @@ function satisfies(
     }
   }
 
-  if (valueKind === "date") {
+  if (value_kind === "date") {
     const a = Date.parse(actual);
     const t = Date.parse(target);
     if (isNaN(a) || isNaN(t)) return true;
@@ -42,7 +42,7 @@ function satisfies(
     }
   }
 
-  if (valueKind === "boolean") {
+  if (value_kind === "boolean") {
     return actual.toLowerCase() === target.toLowerCase();
   }
 
@@ -73,7 +73,7 @@ export function evaluateRules(
     const field = fields.find((f) => f.id === rule.fieldId);
     if (!field) continue;
 
-    if (!satisfies(actual, rule.operator, rule.value, field.valueKind)) {
+    if (!satisfies(actual, rule.operator, rule.value, field.value_kind)) {
       violations.push({ rule, field, actualValue: actual });
     }
   }
@@ -92,6 +92,16 @@ const OP_PHRASES: Record<string, string> = {
 
 /** Human-readable description of a rule, e.g. "Monthly income must be at least 3000" */
 export function describeViolation(v: RuleViolation): string {
+  if (v.field.value_kind === "boolean") {
+    const label = v.field.label.replace(/\?$/, "").trim();
+    const expected = v.rule.value === "true";
+    if (v.rule.operator === "==" || v.rule.operator === "!=") {
+      const shouldBe = v.rule.operator === "==" ? expected : !expected;
+      return shouldBe
+        ? `applicants must be able to answer "yes" to: ${v.field.label}`
+        : `applicants must answer "no" to: ${v.field.label}`;
+    }
+  }
   const phrase = OP_PHRASES[v.rule.operator] ?? v.rule.operator;
   return `${v.field.label} ${phrase} ${v.rule.value}`;
 }

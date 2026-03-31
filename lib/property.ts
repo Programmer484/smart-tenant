@@ -56,20 +56,17 @@ export type SharedFieldRecord = LandlordField & {
   sort_order: number;
 };
 
+
 /**
  * Merge shared fields + own fields into a single ordered list.
- * Shared fields appear first, in the order defined by shared_field_ids.
+ * All shared fields are included first, then property-specific fields.
  */
 export function resolveFields(
-  property: Pick<PropertyRecord, "shared_field_ids" | "own_fields">,
+  property: Pick<PropertyRecord, "own_fields">,
   sharedFields: LandlordField[],
 ): LandlordField[] {
-  const ids = property.shared_field_ids ?? [];
   const own = property.own_fields ?? [];
-  const shared = ids
-    .map((id) => sharedFields.find((f) => f.id === id))
-    .filter((f): f is LandlordField => f !== undefined);
-  return [...shared, ...own];
+  return [...sharedFields, ...own];
 }
 
 export function defaultIntroMessage(title: string): string {

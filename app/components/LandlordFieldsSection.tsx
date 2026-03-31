@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useId } from "react";
+import React, { useState, useEffect, useRef, useId } from "react";
 import {
   FIELD_VALUE_KINDS,
   FieldValueKind,
@@ -27,8 +27,7 @@ function emptyField(): LandlordField & { _key: string } {
     _key: generateId(),
     id: "",
     label: "",
-    valueKind: "text",
-    required: true,
+    value_kind: "text",
   };
 }
 
@@ -55,7 +54,7 @@ function FieldRow({
   const idError = field.id ? validateLandlordFieldId(field.id) : null;
   const labelError = field.label ? validateLandlordFieldLabel(field.label) : null;
   const enumOptionsError =
-    field.valueKind === "enum"
+    field.value_kind === "enum"
       ? validateEnumOptions(field.options)
       : null;
 
@@ -137,10 +136,10 @@ function FieldRow({
             </label>
             <select
               id={`${uid}-kind`}
-              value={field.valueKind}
+              value={field.value_kind}
               onChange={(e) => {
                 const k = e.target.value as FieldValueKind;
-                const next: FieldWithKey = { ...field, valueKind: k };
+                const next: FieldWithKey = { ...field, value_kind: k };
                 if (k === "enum") {
                   next.options =
                     field.options?.length ? [...field.options] : ["", ""];
@@ -159,28 +158,9 @@ function FieldRow({
             </select>
           </div>
 
-          {/* Required toggle */}
-          <div className="flex items-center gap-2 pb-2">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={field.required ?? false}
-              onClick={() => onChange({ ...field, required: !field.required })}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 ${
-                field.required ? "bg-teal-700" : "bg-foreground/20"
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                  field.required ? "translate-x-5" : "translate-x-0"
-                }`}
-              />
-            </button>
-            <span className="text-sm text-foreground/60">Required</span>
-          </div>
         </div>
 
-        {field.valueKind === "enum" ? (
+        {field.value_kind === "enum" ? (
           <div className="flex flex-col gap-2">
             <span className="text-xs text-foreground/50">
               Answer choices (at least two)
@@ -262,21 +242,37 @@ function FieldRow({
 export default function LandlordFieldsSection({
   fields,
   onChange,
+  fieldAction,
+  onBeforeDelete,
 }: {
   fields: LandlordField[];
   onChange: (fields: LandlordField[]) => void;
+  fieldAction?: (field: LandlordField) => React.ReactNode;
+  /** Return false to cancel deletion. Called with the field about to be removed. */
+  onBeforeDelete?: (field: LandlordField) => boolean;
 }) {
+  function fingerprint(f: LandlordField[]) {
+    return f.map((x) => x.id).join("\0") + "\0" + f.length;
+  }
+
   const [rows, setRows] = useState<FieldWithKey[]>(() =>
     fields.map((f) => ({ ...f, _key: generateId() }))
   );
+  const sigRef = useRef(fingerprint(fields));
 
   useEffect(() => {
-    setRows(fields.map((f) => ({ ...f, _key: generateId() })));
+    const sig = fingerprint(fields);
+    if (sig !== sigRef.current) {
+      sigRef.current = sig;
+      setRows(fields.map((f) => ({ ...f, _key: generateId() })));
+    }
   }, [fields]);
 
   function update(next: FieldWithKey[]) {
     setRows(next);
-    onChange(next.map(({ _key: _, ...f }) => f));
+    const plain = next.map(({ _key: _, ...f }) => f);
+    sigRef.current = fingerprint(plain);
+    onChange(plain);
   }
 
   function handleChange(index: number, updated: FieldWithKey) {
@@ -286,6 +282,8 @@ export default function LandlordFieldsSection({
   }
 
   function handleDelete(index: number) {
+    const field = rows[index];
+    if (field && onBeforeDelete && !onBeforeDelete(field)) return;
     update(rows.filter((_, i) => i !== index));
   }
 
@@ -316,16 +314,22 @@ export default function LandlordFieldsSection({
       {rows.length > 0 && (
         <div className="flex flex-col gap-3">
           {rows.map((field, i) => (
-            <FieldRow
-              key={field._key}
-              field={field}
-              index={i}
-              total={rows.length}
-              onChange={(updated) => handleChange(i, updated)}
-              onDelete={() => handleDelete(i)}
-              onMoveUp={() => handleMoveUp(i)}
-              onMoveDown={() => handleMoveDown(i)}
-            />
+            <div key={field._key} className="flex items-start gap-2">
+              <div className="flex-1">
+                <FieldRow
+                  field={field}
+                  index={i}
+                  total={rows.length}
+                  onChange={(updated) => handleChange(i, updated)}
+                  onDelete={() => handleDelete(i)}
+                  onMoveUp={() => handleMoveUp(i)}
+                  onMoveDown={() => handleMoveDown(i)}
+                />
+              </div>
+              {fieldAction && field.id && (
+                <div className="pt-2">{fieldAction(field)}</div>
+              )}
+            </div>
           ))}
         </div>
       )}
