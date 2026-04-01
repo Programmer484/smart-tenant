@@ -349,15 +349,15 @@ export async function POST(req: Request) {
   // Off-topic limit exceeded → reject
   if (ai.offTopicLimit > 0 && offTopicCount >= ai.offTopicLimit) {
     sessionStatus = "rejected";
-    responseContext = `\n\nIMPORTANT — OFF-TOPIC REJECTION:\nThe applicant has sent ${offTopicCount} off-topic messages in a row (limit is ${ai.offTopicLimit}). Politely let them know you're closing the conversation because the screening wasn't making progress. Wish them well.`;
+    responseContext = `\n\nIMPORTANT — OFF-TOPIC REJECTION:\nThe applicant has sent ${offTopicCount} consecutive off-topic messages (limit: ${ai.offTopicLimit}). Close the conversation and state the reason.`;
   } else if (firstViolation) {
     const req = describeViolation(firstViolation);
     if (clarificationPending) {
       sessionStatus = "rejected";
-      responseContext = `\n\nIMPORTANT — REJECTION:\nThe applicant still doesn't meet this requirement: ${req}. They were already given a chance to clarify. Kindly let them know you can't move forward — state the specific reason and wish them well.`;
+      responseContext = `\n\nIMPORTANT — REJECTION:\nRequirement not met: ${req}. They already had a chance to clarify.\n${ai.rejectionPrompt}`;
     } else {
       sessionStatus = "clarifying";
-      responseContext = `\n\nIMPORTANT — ELIGIBILITY CONCERN:\nThe applicant's answer doesn't meet this requirement: ${req}. Gently let them know about the issue and give them a chance to correct themselves. Describe the requirement in natural, human-friendly language.`;
+      responseContext = `\n\nIMPORTANT — ELIGIBILITY CONCERN:\nRequirement not met: ${req}.\n${ai.clarificationPrompt}`;
     }
   } else if (isQualified || allCollected) {
     const limit = ai.qualifiedFollowUps;
@@ -377,17 +377,17 @@ export async function POST(req: Request) {
     if (links.videoUrl) linkLines.push(`- Video tour: ${links.videoUrl}`);
     if (links.bookingUrl) linkLines.push(`- Book a viewing: ${links.bookingUrl}`);
     if (linkLines.length > 0) {
-      responseContext = `\n\nIMPORTANT — QUALIFIED APPLICANT:\nThe applicant meets all requirements. Congratulate them and share these links:\n${linkLines.join("\n")}\nInclude the full URLs in your message so the applicant can click them.`;
+      responseContext = `\n\nIMPORTANT — QUALIFIED:\nThe applicant meets all requirements. Share these links:\n${linkLines.join("\n")}\nInclude the full URLs.`;
       if (sessionStatus === "completed") {
-        responseContext += `\nThis is the final message — wrap up warmly.`;
+        responseContext += `\nThis is the final message.`;
       }
     } else if (sessionStatus === "completed") {
-      responseContext = `\n\nIMPORTANT — QUALIFIED APPLICANT (FINAL MESSAGE):\nThe applicant meets all requirements. Congratulate them and let them know someone will be in touch. Wrap up warmly.`;
+      responseContext = `\n\nIMPORTANT — QUALIFIED (FINAL MESSAGE):\nThe applicant meets all requirements. This is the final message.`;
     } else {
-      responseContext = `\n\nNOTE: The applicant is qualified! Let them know they meet the requirements. Answer any remaining questions they have about the property.`;
+      responseContext = `\n\nNOTE: The applicant is qualified and meets all requirements.`;
     }
   } else if (!messageRelevant && offTopicCount > 0) {
-    responseContext = `\n\nNOTE: The applicant's message was off-topic (${offTopicCount}/${ai.offTopicLimit || "∞"} strikes). Gently redirect them back to the screening questions.`;
+    responseContext = `\n\nNOTE: Off-topic message (${offTopicCount}/${ai.offTopicLimit || "∞"}). Redirect to screening questions.`;
   }
 
   // ── PHASE 2: Generate response (with full context) ──

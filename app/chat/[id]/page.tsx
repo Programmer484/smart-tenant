@@ -175,11 +175,13 @@ export default function ChatPage() {
           };
 
           setAnswers(data.answers ?? {});
-          setMessages((data.messages ?? []).map((m) => ({
-            id: generateId(),
-            role: m.role,
-            text: m.content,
-          })));
+          setMessages((data.messages ?? [])
+            .filter((m) => !(m.role === "user" && m.content.startsWith("(new conversation")))
+            .map((m) => ({
+              id: generateId(),
+              role: m.role,
+              text: m.content,
+            })));
 
           if (data.status === "rejected") setRejected(true);
           if (data.status === "qualified") {

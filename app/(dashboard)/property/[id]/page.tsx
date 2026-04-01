@@ -561,6 +561,44 @@ export default function PropertySetupPage() {
                   </div>
                 </div>
 
+                <div className="space-y-4 rounded-lg border border-foreground/8 bg-[#f7f9f8] p-5">
+                  <h3 className="text-sm font-medium text-foreground/80">Eligibility responses</h3>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground/60">
+                      First concern (clarification)
+                    </label>
+                    <p className="text-[11px] text-foreground/35">
+                      How the AI should respond when an applicant first fails a rule.
+                    </p>
+                    <textarea
+                      rows={2}
+                      value={aiInstructions.clarificationPrompt}
+                      onChange={(e) =>
+                        setAiInstructions((prev) => ({ ...prev, clarificationPrompt: e.target.value }))
+                      }
+                      placeholder="e.g. Let the applicant know their answer doesn't meet the requirement and give them a chance to correct it."
+                      className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-3 py-2 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground/60">
+                      Confirmed rejection
+                    </label>
+                    <p className="text-[11px] text-foreground/35">
+                      How the AI should respond when an applicant still fails after clarification.
+                    </p>
+                    <textarea
+                      rows={2}
+                      value={aiInstructions.rejectionPrompt}
+                      onChange={(e) =>
+                        setAiInstructions((prev) => ({ ...prev, rejectionPrompt: e.target.value }))
+                      }
+                      placeholder="e.g. Let the applicant know they don't meet the requirement, state the reason, and close the conversation."
+                      className="w-full resize-none rounded-lg border border-foreground/10 bg-white px-3 py-2 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:outline-none"
+                    />
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground/80">
                     Style instructions

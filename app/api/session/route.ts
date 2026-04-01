@@ -44,14 +44,18 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Failed to load messages" }, { status: 500 });
   }
 
-  return NextResponse.json({
-    status: sesRes.data.status,
-    answers: (sesRes.data.answers as Record<string, string> | null) ?? {},
-    messages: (msgRes.data ?? []).map((m) => ({
+  const allMessages = (msgRes.data ?? [])
+    .filter((m) => !(m.role === "user" && typeof m.content === "string" && m.content.startsWith("(new conversation")))
+    .map((m) => ({
       role: m.role as "user" | "assistant",
       content: m.content as string,
       created_at: m.created_at as string,
-    })),
+    }));
+
+  return NextResponse.json({
+    status: sesRes.data.status,
+    answers: (sesRes.data.answers as Record<string, string> | null) ?? {},
+    messages: allMessages,
   });
 }
 

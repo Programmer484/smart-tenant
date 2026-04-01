@@ -18,6 +18,10 @@ export type AiInstructions = {
   qualifiedFollowUps: number;
   /** How to handle questions not covered by the property description */
   unknownInfoBehavior: "deflect" | "ignore";
+  /** Instruction for the AI when an applicant's answer first fails a rule */
+  clarificationPrompt: string;
+  /** Instruction for the AI when an applicant still fails after clarification */
+  rejectionPrompt: string;
 };
 
 export const DEFAULT_AI_INSTRUCTIONS: AiInstructions = {
@@ -26,6 +30,8 @@ export const DEFAULT_AI_INSTRUCTIONS: AiInstructions = {
   offTopicLimit: 3,
   qualifiedFollowUps: 3,
   unknownInfoBehavior: "deflect",
+  clarificationPrompt: "Let the applicant know their answer doesn't meet the requirement and give them a chance to correct it.",
+  rejectionPrompt: "Let the applicant know they don't meet the requirement, state the reason, and close the conversation.",
 };
 
 /** Merge partial/missing settings with defaults */
