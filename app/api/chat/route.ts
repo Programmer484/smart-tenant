@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { LandlordField, FieldValueKind } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
+import type { Question } from "@/lib/question";
 import type { AiInstructions, PropertyLinks } from "@/lib/property";
 import { resolveAiInstructions, DEFAULT_LINKS } from "@/lib/property";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -15,7 +16,7 @@ type Extraction = { fieldId: string; value: string };
 const EXTRACT_TOOL = {
   name: "extract_fields",
   description:
-    "Extract screening field values from the applicant's message and classify relevance.",
+    "Extract screening field values from the applicant's message. Only extract into known field IDs.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -56,7 +57,7 @@ const RESPOND_TOOL = {
       end_conversation: {
         type: "boolean",
         description:
-          "true if the conversation should end — e.g. the applicant refuses to provide required info, is uncooperative, or the conversation clearly isn't progressing. Your reply should be a polite closing message.",
+          "true ONLY if the applicant is explicitly hostile, refuses to answer after multiple attempts, or spamming. NEVER set this to true simply because you finished collecting all questions. If the interview is complete, set this to false.",
       },
     },
     required: ["reply", "end_conversation"],
@@ -88,87 +89,184 @@ function isValidExtraction(
   }
 }
 
-// ─── System prompt ──────────────────────────────────────────────────
+// ─── Question / field resolution ────────────────────────────────────
 
-function getActiveFields(
+/**
+ * Given questions and fields, find the next question to ask.
+ * A question is "done" when ALL of its fieldIds have been answered.
+ * Also checks visibility rules (ask-rules) on each question's fields.
+ */
+function findNextQuestion(
+  questions: Question[],
   fields: LandlordField[],
   rules: LandlordRule[],
   answers: Record<string, string>,
-): LandlordField[] {
-  return fields.filter(f => {
-     const askRules = rules.filter(r => r.action === "ask" && r.targetFieldId === f.id);
-     if (askRules.length === 0) return true;
-     return askRules.some(r => evaluateRule(r, fields, answers) === true);
-  });
+): Question | null {
+  const sorted = [...questions].sort((a, b) => a.sort_order - b.sort_order);
+
+  for (const q of sorted) {
+    // Check if ALL fields for this question are answered
+    const allFieldsFilled = q.fieldIds.every((fid) => answers[fid] !== undefined);
+    if (allFieldsFilled) continue;
+
+    // Check visibility rules: if any field in the question has an ask-rule,
+    // check if the ask-rule's conditions are met
+    const someFieldActive = q.fieldIds.some((fid) => {
+      const askRules = rules.filter(
+        (r) => r.action === "ask" && r.targetFieldId === fid,
+      );
+      if (askRules.length === 0) return true; // no ask rules = always active
+      return askRules.some((r) => evaluateRule(r, fields, answers) === true);
+    });
+
+    if (!someFieldActive) continue;
+
+    return q;
+  }
+
+  return null;
 }
+
+/**
+ * Find fields that are still missing but should have been answered
+ * by a question that was already asked (partial compound extractions).
+ */
+function findMissingFieldsFromAskedQuestions(
+  questions: Question[],
+  fields: LandlordField[],
+  answers: Record<string, string>,
+): LandlordField[] {
+  const missing: LandlordField[] = [];
+  const sorted = [...questions].sort((a, b) => a.sort_order - b.sort_order);
+
+  for (const q of sorted) {
+    // If at least one field is answered but others aren't → partial extraction
+    const hasAny = q.fieldIds.some((fid) => answers[fid] !== undefined);
+    const missingIds = q.fieldIds.filter((fid) => answers[fid] === undefined);
+
+    if (hasAny && missingIds.length > 0) {
+      for (const fid of missingIds) {
+        const field = fields.find((f) => f.id === fid);
+        if (field && !missing.find((m) => m.id === fid)) {
+          missing.push(field);
+        }
+      }
+    }
+  }
+
+  return missing;
+}
+
+// ─── System prompt ──────────────────────────────────────────────────
 
 function buildSystemPrompt(
   title: string,
   description: string,
   fields: LandlordField[],
+  questions: Question[],
   rules: LandlordRule[],
   answers: Record<string, string>,
   ai: AiInstructions,
 ): string {
-  const activeFields = getActiveFields(fields, rules, answers);
-  const answered = fields.filter((f) => answers[f.id] !== undefined);
-  const unanswered = activeFields.filter((f) => answers[f.id] === undefined);
-  const nextField = unanswered[0] ?? null;
+  const nextQuestion = findNextQuestion(questions, fields, rules, answers);
+  const missingFromAsked = findMissingFieldsFromAskedQuestions(questions, fields, answers);
 
-  const answeredBlock =
-    answered.length > 0
-      ? answered
-          .map((f) => `  - ${f.label} (${f.id}): ${answers[f.id]}`)
-          .join("\n")
-      : "  None yet.";
+  // Build field schema block
+  const fieldSchemaBlock = fields.length > 0
+    ? fields
+        .map((f) => {
+          let line = `  - ${f.id}: ${f.value_kind}`;
+          if (f.label) line += ` ("${f.label}")`;
+          if (f.options?.length) line += `, options: [${f.options.join(", ")}]`;
+          const val = answers[f.id];
+          if (val !== undefined) line += ` = "${val}" ✅`;
+          else line += ` = ? ❌`;
+          return line;
+        })
+        .join("\n")
+    : "  None defined.";
 
-  const unansweredBlock =
-    unanswered.length > 0
-      ? unanswered
-          .map((f) => {
-            let line = `  - ${f.label} (${f.id}), type: ${f.value_kind}`;
-            if (f.options?.length) line += `, options: ${f.options.join(", ")}`;
-            if (f.collect_hint) line += ` [hint: ${f.collect_hint}]`;
-            return line;
-          })
-          .join("\n")
-      : "  All collected.";
+  // Build answered/remaining summary
+  const answeredFields = fields.filter((f) => answers[f.id] !== undefined);
+  const unansweredFields = fields.filter((f) => answers[f.id] === undefined);
 
-  const nextInstruction = nextField
-    ? `After addressing the applicant's message, ask this question next: "${nextField.label}"`
-    : "All screening questions have been collected. Thank the applicant and let them know their application is complete and will be reviewed.";
-
+  // Build rejection rules block
   const rulesBlock =
-    rules.length > 0
+    rules.some((r) => r.action === "reject")
       ? rules
-          .filter(r => r.action === "reject")
+          .filter((r) => r.action === "reject")
           .map((r) => {
-            const parts = r.conditions.map((c) => {
-              const field = fields.find((f) => f.id === c.fieldId);
-              return field ? `${field.label} ${c.operator} ${c.value}` : null;
-            }).filter(Boolean);
-            return parts.length > 0 ? `  - Reject if: ${parts.join(" AND ")}` : null;
+            const parts = r.conditions
+              .map((c) => {
+                const field = fields.find((f) => f.id === c.fieldId);
+                return field
+                  ? `${field.label || field.id} ${c.operator} ${c.value}`
+                  : null;
+              })
+              .filter(Boolean);
+            return parts.length > 0
+              ? `  - Reject if: ${parts.join(" AND ")}`
+              : null;
           })
           .filter(Boolean)
           .join("\n")
       : "  None defined.";
 
+  // Build question list block (showing interview flow)
+  const questionsBlock = questions.length > 0
+    ? [...questions]
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((q, i) => {
+          const allFilled = q.fieldIds.every((fid) => answers[fid] !== undefined);
+          const status = allFilled ? "✅ done" : "❌ pending";
+          const fieldList = q.fieldIds.join(", ");
+          return `  ${i + 1}. "${q.text}" → fields: [${fieldList}] ${status}`;
+        })
+        .join("\n")
+    : "  None defined.";
+
   const groundingInstruction =
     ai.unknownInfoBehavior === "ignore"
       ? "Do not answer questions about details not covered above. Redirect the applicant back to the screening questions."
-      : "Only answer property questions using the property description and applicant-facing summary above. If the information is not there, say you don't have that detail and suggest contacting the landlord. Never invent details.";
+      : "Only answer property questions using the property description above. If the information is not there, say you don't have that detail and suggest contacting the landlord. Never invent details.";
 
+  // Build the next question instruction
+  let nextInstruction: string;
+  if (missingFromAsked.length > 0) {
+    // There are fields from a previous question that weren't fully extracted
+    const missingList = missingFromAsked
+      .map((f) => `"${f.label || f.id}" (${f.id}, type: ${f.value_kind})`)
+      .join(", ");
+    nextInstruction = `FOLLOW-UP REQUIRED: The applicant's previous answer didn't cover all fields. Ask a follow-up to collect these missing fields: ${missingList}. Be conversational — don't just list the fields, ask naturally.`;
+  } else if (nextQuestion) {
+    const fieldDetails = nextQuestion.fieldIds
+      .filter((fid) => answers[fid] === undefined)
+      .map((fid) => {
+        const f = fields.find((x) => x.id === fid);
+        return f ? `${f.id} (${f.value_kind})` : fid;
+      })
+      .join(", ");
+    nextInstruction = `NEXT QUESTION: Ask exactly this: "${nextQuestion.text}". This question collects fields: [${fieldDetails}].${nextQuestion.extract_hint ? ` Hint: ${nextQuestion.extract_hint}` : ""}`;
+  } else {
+    nextInstruction =
+      "All screening questions have been collected. Do not ask any more questions. Thank the applicant and let them know their application is complete and will be reviewed.";
+  }
 
   let prompt = `You are a rental screening assistant for "${title}".
 
 PROPERTY:
 ${description}
 
-RULES:
+FIELD SCHEMA (data to collect):
+${fieldSchemaBlock}
+
+INTERVIEW QUESTIONS (ask in this order):
+${questionsBlock}
+
+STRICT RULES:
 ${rulesBlock}
 
-COLLECTED: ${answeredBlock}
-REMAINING: ${unansweredBlock}`;
+STATUS: ${answeredFields.length}/${fields.length} fields collected.`;
 
   if (ai.style) {
     prompt += `\n\nSTYLE (follow these instructions closely):\n${ai.style}`;
@@ -186,10 +284,15 @@ REMAINING: ${unansweredBlock}`;
 
   prompt += `\n\nINSTRUCTIONS:
 - ${groundingInstruction}
-- Extract screening values from each message, including corrections to previous answers. Values: plain strings, numbers like "3500", booleans as "true"/"false".
+- Extract screening values from each message into the FIELD SCHEMA. Values: plain strings, numbers like "3500", booleans as "true"/"false".
 - ${nextInstruction}
-- One question at a time.
-- Set end_conversation to true only if the applicant refuses info after 2+ asks, is clearly not applying, or the conversation has stalled. Include the reason in your closing message. Otherwise set it to false.`;
+- NEVER invent new fields or ask about topics not in the FIELD SCHEMA.
+- NEVER deviate from the INTERVIEW QUESTIONS order, EXCEPT to follow up on missing fields from a previous question.
+- CRITICAL: NEVER evaluate applicant eligibility against the STRICT RULES yourself. The system backend evaluates them automatically.`;
+
+  if (ai.style) {
+    prompt += `\n- CRITICAL STYLE ENFORCEMENT: You must adopt the following persona/style explicitly: "${ai.style.trim()}". Tone, formatting, and especially length constraints must be followed strictly on every single message.`;
+  }
 
   return prompt;
 }
@@ -223,6 +326,9 @@ export async function POST(req: Request) {
     typeof rec.description === "string" ? rec.description.trim() : "";
   const fields = Array.isArray(rec.fields)
     ? (rec.fields as LandlordField[])
+    : [];
+  const questions = Array.isArray(rec.questions)
+    ? (rec.questions as Question[])
     : [];
   const rules = Array.isArray(rec.rules)
     ? (rec.rules as LandlordRule[])
@@ -274,23 +380,16 @@ export async function POST(req: Request) {
   }
 
   // ── PHASE 1: Extract fields ──
-  // Only send the last exchange (assistant + user) so the AI focuses on
-  // the newest message and doesn't re-extract from old ones.
 
   const extractSystem = buildSystemPrompt(
-    title, description, fields, rules, answers, ai,
+    title, description, fields, questions, rules, answers, ai,
   );
-
-  const lastUserIdx = messages.findLastIndex((m) => m.role === "user");
-  const extractMessages: IncomingMessage[] = lastUserIdx >= 0
-    ? messages.slice(Math.max(0, lastUserIdx - 1))
-    : messages;
 
   let extractData;
   try {
     extractData = await callClaude(key, {
-      system: extractSystem + "\n\nYour only job right now is to extract field values from the applicant's latest message. Do not write a reply.",
-      messages: extractMessages,
+      system: extractSystem + "\n\nYour only job right now is to extract field values from the applicant's message into the FIELD SCHEMA. Only use field IDs from the schema. If a value was implied earlier but not yet extracted, extract it now. Do not write a reply.",
+      messages: messages,
       tools: [EXTRACT_TOOL],
       tool_choice: { type: "tool", name: "extract_fields" },
     });
@@ -310,12 +409,15 @@ export async function POST(req: Request) {
   const rawExtracted = Array.isArray(extractInput?.extracted) ? extractInput.extracted : [];
   const messageRelevant = extractInput?.message_relevant !== false;
 
-  // ── Validate extractions ──
+  // ── Validate extractions against field schema ──
 
   const extracted: Extraction[] = [];
   for (const ex of rawExtracted) {
     const field = fields.find((f) => f.id === ex.fieldId);
-    if (!field) continue;
+    if (!field) {
+      console.warn(`[chat] Dropped extraction for unknown field: ${ex.fieldId}`);
+      continue;
+    }
     if (!isValidExtraction(ex.value, field.value_kind, field.options)) {
       console.warn(
         `[chat] Dropped invalid extraction: ${ex.fieldId}="${ex.value}" (expected ${field.value_kind})`,
@@ -334,17 +436,18 @@ export async function POST(req: Request) {
 
   const violations = evaluateRules(rules, fields, mergedAnswers);
   const firstViolation = violations[0] ?? null;
-  const activeFieldsForCompletion = getActiveFields(fields, rules, mergedAnswers);
-  const allCollected =
-    activeFieldsForCompletion.length > 0 &&
-    activeFieldsForCompletion.every((f) => mergedAnswers[f.id] !== undefined);
+
+  // Completion is based on fields, not questions
+  const allFieldsCollected =
+    fields.length > 0 &&
+    fields.every((f) => mergedAnswers[f.id] !== undefined);
 
   // ── Update counters ──
 
   if (!messageRelevant) {
     offTopicCount += 1;
   } else {
-    offTopicCount = 0; // reset on relevant message
+    offTopicCount = 0;
   }
 
   if (isQualified) {
@@ -362,7 +465,6 @@ export async function POST(req: Request) {
 
   let responseContext = "";
 
-  // Off-topic limit exceeded → reject
   if (ai.offTopicLimit > 0 && offTopicCount >= ai.offTopicLimit) {
     sessionStatus = "rejected";
     responseContext = `\n\nIMPORTANT — OFF-TOPIC REJECTION:\nThe applicant has sent ${offTopicCount} consecutive off-topic messages (limit: ${ai.offTopicLimit}). Close the conversation and state the reason.`;
@@ -375,7 +477,7 @@ export async function POST(req: Request) {
       sessionStatus = "clarifying";
       responseContext = `\n\nIMPORTANT — ELIGIBILITY CONCERN:\nRequirement not met: ${req}.\n${ai.clarificationPrompt}`;
     }
-  } else if (isQualified || allCollected) {
+  } else if (isQualified || allFieldsCollected) {
     const limit = ai.qualifiedFollowUps;
 
     if (
@@ -388,7 +490,6 @@ export async function POST(req: Request) {
       sessionStatus = "qualified";
     }
 
-    // Build links context for qualified applicants
     const linkLines: string[] = [];
     if (links.videoUrl) linkLines.push(`- Video tour: ${links.videoUrl}`);
     if (links.bookingUrl) linkLines.push(`- Book a viewing: ${links.bookingUrl}`);
@@ -406,10 +507,10 @@ export async function POST(req: Request) {
     responseContext = `\n\nNOTE: Off-topic message (${offTopicCount}/${ai.offTopicLimit || "∞"}). Redirect to screening questions.`;
   }
 
-  // ── PHASE 2: Generate response (with full context) ──
+  // ── PHASE 2: Generate response ──
 
   const respondSystem = buildSystemPrompt(
-    title, description, fields, rules, mergedAnswers, ai,
+    title, description, fields, questions, rules, mergedAnswers, ai,
   ) + responseContext;
 
   let respondData;
@@ -436,15 +537,13 @@ export async function POST(req: Request) {
   const reply = respondInput?.reply ?? "I'm sorry, something went wrong. Could you try again?";
   const endConversation = respondInput?.end_conversation === true;
 
-  // AI-driven end_conversation overrides status
   if (endConversation && sessionStatus === "in_progress") {
     sessionStatus = "rejected";
   }
 
-  // Update clarification_pending for next round
   const nextClarificationPending = sessionStatus === "clarifying";
 
-  // ── Persist to Supabase (best-effort) ──
+  // ── Persist to Supabase ──
 
   const dbStatus =
     sessionStatus === "rejected"
@@ -500,5 +599,11 @@ export async function POST(req: Request) {
     reply,
     extracted,
     sessionStatus,
+    debugInfo: {
+      sessionStatus,
+      offTopicCount,
+      clarificationPending: nextClarificationPending,
+      firstViolation: firstViolation ? describeViolation(firstViolation, fields) : null,
+    }
   });
 }

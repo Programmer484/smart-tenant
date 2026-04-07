@@ -42,7 +42,7 @@ export type RuleCondition = {
   value: string;
 };
 
-export type RuleAction = "reject" | "ask";
+export type RuleAction = "reject" | "ask" | "require";
 
 export type LandlordRule = {
   /** Unique id for this rule row */

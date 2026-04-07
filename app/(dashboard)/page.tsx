@@ -14,7 +14,7 @@ export default async function PropertiesPage() {
 
   const { data: properties } = await supabase
     .from("properties")
-    .select("id,title,description,own_fields,shared_field_ids,rules,created_at,updated_at")
+    .select("id,title,description,fields,questions,rules,created_at,updated_at")
     .order("created_at", { ascending: false });
 
   const list = (properties as PropertyRecord[] | null) ?? [];
@@ -47,8 +47,8 @@ export default async function PropertiesPage() {
       ) : (
         <div className="space-y-3">
           {list.map((p) => {
-            const fieldCount =
-              (p.shared_field_ids?.length ?? 0) + (p.own_fields?.length ?? 0);
+            const fieldCount = ((p as any).fields ?? []).length;
+            const questionCount = ((p as any).questions ?? []).length;
             const ruleCount = p.rules?.length ?? 0;
             const desc = (p.description ?? "").trim();
             const updatedAt = p.updated_at ?? p.created_at;
@@ -74,7 +74,7 @@ export default async function PropertiesPage() {
                         </p>
                       )}
                       <p className="mt-2 text-xs text-[#1a2e2a]/40">
-                        {fieldCount} question{fieldCount !== 1 ? "s" : ""} ·{" "}
+                        {fieldCount} field{fieldCount !== 1 ? "s" : ""} · {questionCount} question{questionCount !== 1 ? "s" : ""} ·{" "}
                         {ruleCount} rule{ruleCount !== 1 ? "s" : ""}
                         {relTime && (
                           <span className="text-[#1a2e2a]/25"> · updated {relTime}</span>

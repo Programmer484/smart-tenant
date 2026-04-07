@@ -1,5 +1,5 @@
 export const ANTHROPIC_VERSION = "2023-06-01";
-export const MODEL = "claude-haiku-4-5-20251001";
+export const MODEL = "claude-sonnet-4-6";
 
 type Tool = {
   name: string;

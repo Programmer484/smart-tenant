@@ -5,9 +5,10 @@ import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
 import type { PropertyRecord, PropertyLinks, AiInstructions } from "@/lib/property";
-import { resolveFields, resolveAiInstructions, DEFAULT_LINKS } from "@/lib/property";
+import { resolveAiInstructions, DEFAULT_LINKS } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
+import type { Question } from "@/lib/question";
 
 type Role = "assistant" | "user";
 type Extraction = { fieldId: string; value: string };
@@ -19,6 +20,7 @@ type ChatConfig = {
   title: string;
   description: string;
   fields: LandlordField[];
+  questions: Question[];
   rules: LandlordRule[];
   links: PropertyLinks;
   aiInstructions: AiInstructions;
@@ -65,6 +67,7 @@ export default function ChatPage() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pageReady, setPageReady] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
 
   const [showDebug] = useState(() =>
     typeof window !== "undefined" &&
@@ -108,11 +111,12 @@ export default function ChatPage() {
           title: cfg.title,
           description: cfg.description,
           fields: cfg.fields,
+          questions: cfg.questions,
           rules: cfg.rules,
           links: cfg.links,
           aiInstructions: cfg.aiInstructions,
           answers: {},
-          messages: [{ role: "user", content: "(new conversation — introduce yourself and ask the first screening question)" }],
+          messages: [{ role: "user", content: "(new conversation — very concisely introduce yourself and ask the first screening question)" }],
           sessionId: sid,
           propertyId: cfg.id,
         }),
@@ -130,10 +134,11 @@ export default function ChatPage() {
 
   useEffect(() => {
     async function load() {
-      const [propRes, sharedRes] = await Promise.all([
-        supabase.from("properties").select("*").eq("id", propertyId).single(),
-        supabase.from("shared_fields").select("*").order("sort_order"),
-      ]);
+      const propRes = await supabase
+        .from("properties")
+        .select("*")
+        .eq("id", propertyId)
+        .single();
 
       if (propRes.error || !propRes.data) {
         setMessages([{
@@ -145,14 +150,13 @@ export default function ChatPage() {
       }
 
       const p = propRes.data as PropertyRecord;
-      const sharedAll = (sharedRes.data as LandlordField[] | null) ?? [];
-      const fields = resolveFields(p, sharedAll);
 
       const cfg: ChatConfig = {
         id: p.id,
         title: p.title,
         description: p.description,
-        fields,
+        fields: (p.fields as LandlordField[]) ?? [],
+        questions: (p.questions as Question[]) ?? [],
         rules: (p.rules as LandlordRule[]) ?? [],
         links: { ...DEFAULT_LINKS, ...(p.links as Partial<PropertyLinks>) },
         aiInstructions: resolveAiInstructions(p.ai_instructions),
@@ -237,6 +241,7 @@ export default function ChatPage() {
           title: config.title,
           description: config.description,
           fields: config.fields,
+          questions: config.questions,
           rules: config.rules,
           links: config.links,
           aiInstructions: config.aiInstructions,
@@ -261,11 +266,14 @@ export default function ChatPage() {
         reply?: string;
         extracted?: Extraction[];
         sessionStatus?: string;
+        debugInfo?: any;
       };
 
       const extracted = data.extracted ?? [];
       const reply = data.reply ?? "Something went wrong.";
       const status = data.sessionStatus ?? "in_progress";
+
+      if (data.debugInfo) setDebugInfo(data.debugInfo);
 
       setMessages((prev) => [
         ...prev,
@@ -424,14 +432,24 @@ export default function ChatPage() {
 
       {/* Debug panel (only with ?debug=1) */}
       {showDebug && debugOpen && (
-        <div className="border-b border-black/8 bg-black/[0.03] px-4 py-4">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[#1a2e2a]/40">Answers state</p>
-          {Object.keys(answers).length === 0 ? (
-            <p className="font-mono text-[11px] text-[#1a2e2a]/40">No answers yet.</p>
-          ) : (
-            <pre className="font-mono text-[11px] leading-relaxed text-[#1a2e2a]/70">
-              {JSON.stringify(answers, null, 2)}
-            </pre>
+        <div className="border-b border-black/8 bg-black/[0.03] px-4 py-4 space-y-4">
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[#1a2e2a]/40">Answers state</p>
+            {Object.keys(answers).length === 0 ? (
+              <p className="font-mono text-[11px] text-[#1a2e2a]/40">No answers yet.</p>
+            ) : (
+              <pre className="font-mono text-[11px] leading-relaxed text-[#1a2e2a]/70 whitespace-pre-wrap break-words">
+                {JSON.stringify(answers, null, 2)}
+              </pre>
+            )}
+          </div>
+          {debugInfo && (
+            <div>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[#1a2e2a]/40">Rule Engine & DB state</p>
+              <pre className="font-mono text-[11px] leading-relaxed text-red-800/80 bg-red-100/50 p-2 rounded whitespace-pre-wrap break-words">
+                {JSON.stringify(debugInfo, null, 2)}
+              </pre>
+            </div>
           )}
         </div>
       )}
@@ -442,9 +460,8 @@ export default function ChatPage() {
           {messages.map((msg) => (
             <div key={msg.id} className="flex flex-col">
               <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
-                  msg.role === "assistant" ? "rounded-tl-sm bg-white text-[#1a2e2a]" : "rounded-tr-sm bg-teal-800 text-white"
-                }`}>
+                <div className={`max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${msg.role === "assistant" ? "rounded-tl-sm bg-white text-[#1a2e2a]" : "rounded-tr-sm bg-teal-800 text-white"
+                  }`}>
                   {msg.text.split(/(\*\*[^*]+\*\*)/).map((part, i) =>
                     part.startsWith("**") && part.endsWith("**")
                       ? <strong key={i}>{part.slice(2, -2)}</strong>

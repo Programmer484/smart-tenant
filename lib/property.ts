@@ -1,5 +1,6 @@
 import type { LandlordField } from "./landlord-field";
 import type { LandlordRule } from "./landlord-rule";
+import type { Question } from "./question";
 
 export type PropertyLinks = {
   videoUrl: string;
@@ -47,27 +48,14 @@ export type PropertyRecord = {
   user_id: string;
   title: string;
   description: string;
-  /** Ordered list of shared_fields IDs included in this listing */
-  shared_field_ids: string[];
-  /** Fields defined specifically for this property */
-  own_fields: LandlordField[];
+  /** Canonical data fields (the truth layer) */
+  fields: LandlordField[];
+  /** Ordered questions for the interview flow (maps to fields via fieldIds) */
+  questions: Question[];
+  /** Deterministic rules over fields */
   rules: LandlordRule[];
   links: PropertyLinks;
   ai_instructions: AiInstructions;
   created_at: string;
   updated_at: string;
 };
-
-
-/**
- * Merge shared fields + own fields into a single ordered list.
- * All shared fields are included first, then property-specific fields.
- */
-export function resolveFields(
-  property: Pick<PropertyRecord, "own_fields">,
-  sharedFields: LandlordField[],
-): LandlordField[] {
-  const own = property.own_fields ?? [];
-  return [...sharedFields, ...own];
-}
-

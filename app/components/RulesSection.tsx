@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+
+
 import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 import { RuleBuilder, generateId, emptyCondition } from "./RuleBuilder";
 
-function emptyRule(fields: LandlordField[]): LandlordRule & { _key: string } {
+function buildEmptyRule(fields: LandlordField[], action: "reject" | "require"): LandlordRule & { _key: string } {
   return {
     _key: generateId(),
     id: generateId(),
-    action: "reject",
+    action,
     conditions: [emptyCondition(fields)],
   };
 }
@@ -23,98 +24,117 @@ export default function RulesSection({
   fields: LandlordField[];
   onChange: (rules: LandlordRule[]) => void;
 }) {
-  function fingerprint(r: LandlordRule[]) {
-    // A quick fingerprint to detect external updates.
-    // If we only care about ids, that might not be enough if a condition changes.
-    // Let's just stringify for simplicity since it's small.
-    return JSON.stringify(r);
-  }
+  function RuleList({ action, title, description, badgeColor }: { action: "reject"|"require", title: string, description: string, badgeColor: string }) {
+    const listRules = rules.filter(r => r.action === action);
 
-  // Only manage reject rules here
-  const rejectRules = rules.filter(r => r.action === "reject");
-
-  const [rows, setRows] = useState<(LandlordRule & { _key: string })[]>(() =>
-    rejectRules.map((r) => ({ ...r, _key: generateId() })),
-  );
-  const sigRef = useRef(fingerprint(rejectRules));
-
-  useEffect(() => {
-    const nextReject = rules.filter(r => r.action === "reject");
-    const sig = fingerprint(nextReject);
-    if (sig !== sigRef.current) {
-      sigRef.current = sig;
-      setRows(nextReject.map((r) => ({ ...r, _key: generateId() })));
+    function update(nextRows: LandlordRule[]) {
+      const otherRules = rules.filter(r => r.action !== action);
+      onChange([...otherRules, ...nextRows]);
     }
-  }, [rules]);
 
-  function update(nextRows: (LandlordRule & { _key: string })[]) {
-    setRows(nextRows);
-    const plainRows = nextRows.map(({ _key: _, ...r }) => r);
-    sigRef.current = fingerprint(plainRows);
+    function handleChange(index: number, updated: LandlordRule) {
+      const next = [...listRules];
+      next[index] = updated;
+      update(next);
+    }
 
-    // Merge back into full rules list
-    const otherRules = rules.filter(r => r.action !== "reject");
-    onChange([...otherRules, ...plainRows]);
-  }
+    function handleDelete(index: number) {
+      update(listRules.filter((_, i) => i !== index));
+    }
 
-  function handleChange(index: number, updated: LandlordRule & { _key: string }) {
-    const next = [...rows];
-    next[index] = updated;
-    update(next);
-  }
+    function handleMoveUp(index: number) {
+      if (index === 0) return;
+      const next = [...listRules];
+      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+      update(next);
+    }
 
-  function handleDelete(index: number) {
-    update(rows.filter((_, i) => i !== index));
-  }
+    function handleMoveDown(index: number) {
+      if (index === listRules.length - 1) return;
+      const next = [...listRules];
+      [next[index], next[index + 1]] = [next[index + 1], next[index]];
+      update(next);
+    }
 
-  function handleMoveUp(index: number) {
-    if (index === 0) return;
-    const next = [...rows];
-    [next[index - 1], next[index]] = [next[index], next[index - 1]];
-    update(next);
-  }
+    return (
+      <div className="flex flex-col gap-4">
+        <div>
+          <h3 className="text-[15px] font-semibold text-foreground/80 flex items-center gap-2">
+            {title}
+            {listRules.length > 0 && (
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeColor}`}>
+                {listRules.length}
+              </span>
+            )}
+          </h3>
+          <p className="text-[13px] text-foreground/50 leading-relaxed mt-0.5">
+            {description}
+          </p>
+          {action === "require" && listRules.length > 1 && (
+            <p className="text-[11px] text-foreground/35 mt-1">
+              Applicant must match at least one profile below.
+            </p>
+          )}
+        </div>
 
-  function handleMoveDown(index: number) {
-    if (index === rows.length - 1) return;
-    const next = [...rows];
-    [next[index], next[index + 1]] = [next[index + 1], next[index]];
-    update(next);
+        {listRules.length > 0 && (
+          <div className="flex flex-col gap-1">
+            {listRules.map((rule, i) => (
+              <div key={rule.id}>
+                {i > 0 && action === "require" && (
+                  <div className="flex items-center gap-3 my-2">
+                    <div className="h-px flex-1 bg-teal-700/15" />
+                    <span className="px-2 py-0.5 rounded-full bg-teal-50 text-[10px] font-bold uppercase tracking-wider text-teal-700/60 border border-teal-700/10">or</span>
+                    <div className="h-px flex-1 bg-teal-700/15" />
+                  </div>
+                )}
+                <RuleBuilder
+                  rule={rule}
+                  fields={fields}
+                  isFirst={i === 0}
+                  isLast={i === listRules.length - 1}
+                  onChange={(updated) => handleChange(i, updated)}
+                  onDelete={() => handleDelete(i)}
+                  onMoveUp={() => handleMoveUp(i)}
+                  onMoveDown={() => handleMoveDown(i)}
+                  labelOverride={action === "require" ? "Accept applicant if:" : undefined}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => {
+            const nr = buildEmptyRule(fields, action);
+            const plainRow = { id: nr.id, action: nr.action, conditions: nr.conditions };
+            update([...listRules, plainRow]);
+          }}
+          className="self-start flex items-center gap-1.5 rounded-lg border border-dashed border-foreground/20 px-4 py-2 text-sm text-foreground/50 transition-colors hover:border-foreground/40 hover:text-foreground/70"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          {action === "reject" ? "Add rejection rule" : "Add acceptance profile"}
+        </button>
+      </div>
+    );
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      <h2 className="text-xl font-medium tracking-tight text-foreground">
-        Rejection Rules
-      </h2>
-      <p className="text-sm text-foreground/55">
-        Each rule is a check on applicant answers. Applicants who match any rule are immediately rejected.
-      </p>
-
-      {rows.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {rows.map((rule, i) => (
-            <RuleBuilder
-              key={rule._key}
-              rule={rule}
-              fields={fields}
-              isFirst={i === 0}
-              isLast={i === rows.length - 1}
-              onChange={(updated) => handleChange(i, { ...updated, _key: rule._key })}
-              onDelete={() => handleDelete(i)}
-              onMoveUp={() => handleMoveUp(i)}
-              onMoveDown={() => handleMoveDown(i)}
-            />
-          ))}
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={() => update([...rows, emptyRule(fields)])}
-        className="self-start rounded-lg border border-dashed border-foreground/20 px-4 py-2 text-sm text-foreground/50 transition-colors hover:border-foreground/40 hover:text-foreground/70"
-      >
-        + Add rejection rule
-      </button>
+    <section className="flex flex-col gap-10">
+      <RuleList
+        action="require"
+        title="Acceptance Profiles"
+        description="Stack 'Accept' profiles to allow complex applicant combinations. If you define any profiles, applicants MUST match at least one of them."
+        badgeColor="bg-teal-100 text-teal-800"
+      />
+      <div className="border-t border-foreground/10" />
+      <RuleList
+        action="reject"
+        title="Automatic Rejections (Red Flags)"
+        description="Catch-all rejections that trump everything else. If an applicant matches any of these, they are instantly rejected."
+        badgeColor="bg-red-100 text-red-800"
+      />
     </section>
   );
 }

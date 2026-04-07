@@ -51,6 +51,7 @@ function satisfies(
 
 export type RuleViolation = {
   rule: LandlordRule;
+  message?: string;
 };
 
 /**
@@ -109,6 +110,34 @@ export function evaluateRules(
     }
   }
 
+  const requireRules = rules.filter(r => r.action === "require");
+  if (requireRules.length > 0) {
+    let someMet = false;
+    let someUnknown = false;
+    for (const rule of requireRules) {
+      const isMet = evaluateRule(rule, fields, answers);
+      if (isMet === true) {
+        someMet = true;
+        break; 
+      } else if (isMet === null) {
+        someUnknown = true;
+      }
+    }
+
+    if (!someMet && !someUnknown) {
+      const p = requireRules.map(r => r.conditions.map(c => {
+        const f = fields.find(x => x.id === c.fieldId);
+        const op = f?.value_kind === 'date' ? DATE_OP_PHRASES[c.operator] : OP_PHRASES[c.operator];
+        return `${f?.label} ${op || c.operator} ${c.value}`;
+      }).join(" AND ")).join(" OR ");
+
+      violations.push({
+        rule: { id: "require_failed", action: "require", conditions: [] },
+        message: `Did not meet any allowed profile. Allowed profiles: ${p}`
+      });
+    }
+  }
+
   return violations;
 }
 
@@ -132,6 +161,8 @@ const DATE_OP_PHRASES: Record<string, string> = {
 
 /** Human-readable description of a rule, e.g. "Monthly income is at most 3000 AND Credit is less than 600" */
 export function describeViolation(v: RuleViolation, fields: LandlordField[]): string {
+  if (v.message) return v.message;
+
   const parts = v.rule.conditions.map(cond => {
     const field = fields.find(f => f.id === cond.fieldId);
     if (!field) return `[Unknown field] ${cond.operator} ${cond.value}`;

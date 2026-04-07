@@ -27,6 +27,23 @@ export function emptyCondition(fields: LandlordField[]): RuleCondition {
   };
 }
 
+/** Build a human-readable summary of a single condition */
+function describeCond(cond: RuleCondition, fields: LandlordField[]): string {
+  const field = fields.find((f) => f.id === cond.fieldId);
+  const label = field?.label || cond.fieldId || "?";
+  const op = operatorLabel(cond.operator, field?.value_kind);
+  const val = field?.value_kind === "boolean"
+    ? (cond.value === "true" ? "Yes" : "No")
+    : cond.value || "…";
+  return `${label} ${op} ${val}`;
+}
+
+/** Build a human-readable summary for a full rule (AND block) */
+export function describeRule(rule: LandlordRule, fields: LandlordField[]): string {
+  if (rule.conditions.length === 0) return "No conditions set";
+  return rule.conditions.map((c) => describeCond(c, fields)).join(" and ");
+}
+
 function RuleConditionRow({
   cond,
   fields,
@@ -119,7 +136,7 @@ function RuleConditionRow({
             type={field?.value_kind === "number" ? "number" : field?.value_kind === "date" ? "date" : "text"}
             value={cond.value}
             onChange={(e) => onChange({ ...cond, value: e.target.value })}
-            placeholder={field?.value_kind === "number" ? "0" : "value"}
+            placeholder={field?.value_kind === "number" ? "0" : "Enter a value"}
             className="w-32 rounded-lg border border-foreground/10 bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-foreground/35 focus:border-foreground/25 focus:outline-none focus:ring-1 focus:ring-foreground/15"
           />
         )}
@@ -129,7 +146,7 @@ function RuleConditionRow({
           <button
             type="button"
             onClick={onDelete}
-            aria-label="Remove condition"
+            aria-label="Remove requirement"
             className="shrink-0 p-1.5 text-foreground/30 hover:text-red-500 transition-colors"
           >
              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -152,6 +169,7 @@ export function RuleBuilder({
   onMoveDown,
   isFirst,
   isLast,
+  labelOverride,
 }: {
   rule: LandlordRule;
   fields: LandlordField[];
@@ -161,9 +179,13 @@ export function RuleBuilder({
   onMoveDown?: () => void;
   isFirst?: boolean;
   isLast?: boolean;
+  labelOverride?: string;
 }) {
+  const isGlobal = rule.action !== "ask";
+  const summary = describeRule(rule, fields);
+
   return (
-    <div className={`flex gap-3 rounded-xl border border-foreground/10 ${rule.action === 'reject' ? 'bg-background p-4 shadow-sm' : 'bg-transparent p-0'}`}>
+    <div className={`flex gap-3 rounded-xl border ${isGlobal ? 'border-foreground/10 bg-background p-4 shadow-sm' : 'border-0 bg-transparent p-0'}`}>
       {/* Reorder controls for global rules */}
       {onMoveUp && onMoveDown && (
         <div className="flex flex-col items-center gap-0.5 pt-1 text-foreground/30">
@@ -196,24 +218,38 @@ export function RuleBuilder({
 
       {/* Conditions */}
       <div className="flex flex-1 flex-col gap-3">
-        {rule.conditions.map((cond, idx) => (
-          <div key={cond.id} className="flex flex-col gap-1">
-            {idx > 0 && <span className="text-xs font-semibold text-teal-700/70 ml-2">AND</span>}
-            <RuleConditionRow
-              cond={cond}
-              fields={fields}
-              onChange={(updatedCond) => {
-                const nextConds = [...rule.conditions];
-                nextConds[idx] = updatedCond;
-                onChange({ ...rule, conditions: nextConds });
-              }}
-              onDelete={() => {
-                onChange({ ...rule, conditions: rule.conditions.filter((_, i) => i !== idx) });
-              }}
-              canDelete={rule.conditions.length > 1}
-            />
-          </div>
-        ))}
+        {(labelOverride || rule.action === 'reject') && (
+          <span className="text-sm font-semibold text-foreground/80">
+            {labelOverride || "Reject applicant if:"}
+          </span>
+        )}
+
+        <div className="flex flex-col gap-2 pl-1">
+          {rule.conditions.map((cond, idx) => (
+            <div key={cond.id} className="flex flex-col gap-1">
+              {idx > 0 && (
+                <div className="flex items-center gap-2 ml-1 my-0.5">
+                  <div className="h-px flex-1 bg-foreground/6" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground/25">and</span>
+                  <div className="h-px flex-1 bg-foreground/6" />
+                </div>
+              )}
+              <RuleConditionRow
+                cond={cond}
+                fields={fields}
+                onChange={(updatedCond) => {
+                  const nextConds = [...rule.conditions];
+                  nextConds[idx] = updatedCond;
+                  onChange({ ...rule, conditions: nextConds });
+                }}
+                onDelete={() => {
+                  onChange({ ...rule, conditions: rule.conditions.filter((_, i) => i !== idx) });
+                }}
+                canDelete={rule.conditions.length > 1}
+              />
+            </div>
+          ))}
+        </div>
 
         {/* Add condition button */}
         <button
@@ -221,30 +257,26 @@ export function RuleBuilder({
           onClick={() => {
              onChange({ ...rule, conditions: [...rule.conditions, emptyCondition(fields)] });
           }}
-          className="self-start text-xs font-medium text-foreground/45 hover:text-teal-700 transition-colors"
+          className="self-start flex items-center gap-1 text-xs font-medium text-foreground/45 hover:text-teal-700 transition-colors"
         >
-          + Add &quot;AND&quot; condition
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+          Add filter rule
         </button>
-      </div>
+
+        </div>
 
       {/* Delete Rule */}
       <div className="pt-0.5">
         <button
           type="button"
           onClick={onDelete}
-          aria-label={rule.action === 'reject' ? "Delete rule" : "Remove condition"}
-          className={`shrink-0 rounded-lg p-1.5 transition-colors ${rule.action === 'reject' ? 'text-red-400/70 hover:bg-red-50 hover:text-red-500' : 'text-foreground/30 hover:text-red-500 hover:bg-red-50/50'}`}
+          aria-label="Delete rule"
+          className="shrink-0 rounded-lg p-1.5 transition-colors text-red-400/70 hover:bg-red-50 hover:text-red-500"
         >
-          {rule.action === 'reject' ? (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <path d="M2 4h12M5 4V2.5A1.5 1.5 0 0 1 6.5 1h3A1.5 1.5 0 0 1 11 2.5V4m2 0-.75 9A1.5 1.5 0 0 1 10.75 14.5h-5.5A1.5 1.5 0 0 1 3.75 13L3 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-              <path d="M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          )}
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12M5 4V2.5A1.5 1.5 0 0 1 6.5 1h3A1.5 1.5 0 0 1 11 2.5V4m2 0-.75 9A1.5 1.5 0 0 1 10.75 14.5h-5.5A1.5 1.5 0 0 1 3.75 13L3 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+          </svg>
         </button>
       </div>
     </div>

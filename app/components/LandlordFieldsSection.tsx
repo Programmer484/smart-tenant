@@ -237,28 +237,45 @@ function FieldRow({
 
         {/* Ask Rules (Visibility Branching) */}
         {allFields && fieldRules !== undefined && (
-          <div className="mt-4 flex flex-col gap-2 rounded-lg bg-foreground/[0.02] p-3 border border-foreground/5">
-            <h4 className="text-xs font-medium text-foreground/60 uppercase tracking-wider">Ask this question if:</h4>
-            {fieldRules.map((rule, idx) => (
-              <div key={rule.id} className="relative mt-2">
-                 <div className="hidden sm:block absolute -left-8 top-2 text-[10px] uppercase font-bold text-teal-700/50 -rotate-90 origin-left">OR</div>
-                 <RuleBuilder
-                  rule={rule}
-                  fields={allFields}
-                  onChange={(updated) => onRuleChange?.(idx, updated)}
-                  onDelete={() => onRuleDelete?.(idx)}
-                />
-              </div>
-            ))}
-            <button
-               type="button"
-               onClick={onRuleAdd}
-               className="self-start text-xs font-medium text-teal-700 transition-colors hover:text-teal-800 flex items-center gap-1 mt-1"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
-              Add branch condition
-            </button>
-          </div>
+          <details className="mt-3 group" open={fieldRules.length > 0 ? true : undefined}>
+            <summary className="cursor-pointer select-none text-[11px] font-medium text-foreground/40 hover:text-foreground/60 transition-colors flex items-center gap-1">
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="transition-transform group-open:rotate-90">
+                <path d="M3 1.5l4 3.5-4 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Conditional visibility
+              {fieldRules.length > 0 && (
+                <span className="text-[10px] text-foreground/30">({fieldRules.length})</span>
+              )}
+            </summary>
+            <div className="mt-2 flex flex-col gap-2 rounded-lg bg-foreground/[0.02] p-3 border border-foreground/5">
+              <p className="text-[11px] text-foreground/35">Only ask this question when conditions are met. All rules in a group must be true; any group can trigger it.</p>
+              {fieldRules.map((rule, idx) => (
+                <div key={rule.id} className="relative">
+                  {idx > 0 && (
+                    <div className="flex items-center gap-3 my-2">
+                      <div className="h-px flex-1 bg-teal-700/15" />
+                      <span className="px-2 py-0.5 rounded-full bg-teal-50 text-[10px] font-bold uppercase tracking-wider text-teal-700/60 border border-teal-700/10">or</span>
+                      <div className="h-px flex-1 bg-teal-700/15" />
+                    </div>
+                  )}
+                  <RuleBuilder
+                    rule={rule}
+                    fields={allFields}
+                    onChange={(updated) => onRuleChange?.(idx, updated)}
+                    onDelete={() => onRuleDelete?.(idx)}
+                  />
+                </div>
+              ))}
+              <button
+                 type="button"
+                 onClick={onRuleAdd}
+                 className="self-start text-xs font-medium text-foreground/45 transition-colors hover:text-teal-700 flex items-center gap-1 mt-1"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>
+                Add filter group
+              </button>
+            </div>
+          </details>
         )}
       </div>
 
