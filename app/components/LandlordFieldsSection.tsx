@@ -29,16 +29,17 @@ function labelToFieldId(label: string): string {
     .slice(0, 40);
 }
 
-function emptyField(): LandlordField & { _key: string } {
+function emptyField(): LandlordField & { _key: string; _isNew?: boolean } {
   return {
     _key: generateId(),
     id: "",
     label: "",
     value_kind: "text",
-  };
+    _isNew: true,
+  } as any;
 }
 
-type FieldWithKey = LandlordField & { _key: string };
+type FieldWithKey = LandlordField & { _key: string; _isNew?: boolean };
 
 function FieldRow({
   field,
@@ -77,10 +78,12 @@ function FieldRow({
       ? validateEnumOptions(field.options)
       : null;
 
+  const isLocked = !field._isNew;
+
   function handleLabelChange(newLabel: string) {
     const prevAutoId = labelToFieldId(field.label);
     const updated: FieldWithKey = { ...field, label: newLabel };
-    if (!field.id || field.id === prevAutoId) {
+    if (!isLocked && (!field.id || field.id === prevAutoId)) {
       updated.id = labelToFieldId(newLabel);
     }
     onChange(updated);
@@ -145,9 +148,17 @@ function FieldRow({
             id={`${uid}-id`}
             type="text"
             value={field.id}
-            onChange={(e) => onChange({ ...field, id: e.target.value })}
+            readOnly={isLocked}
+            onChange={(e) => {
+              if (!isLocked) onChange({ ...field, id: e.target.value });
+            }}
             placeholder="field_id"
-            className="w-40 rounded-md border border-foreground/8 bg-foreground/[0.02] px-2 py-1 font-mono text-xs text-foreground/60 placeholder:text-foreground/25 focus:border-foreground/20 focus:outline-none"
+            title={isLocked ? "Field ID cannot be changed once created" : ""}
+            className={`w-40 rounded-md border px-2 py-1 font-mono text-xs focus:outline-none ${
+              isLocked
+                ? "bg-foreground/5 border-transparent text-foreground/40 cursor-not-allowed"
+                : "bg-foreground/[0.02] border-foreground/8 text-foreground/60 placeholder:text-foreground/25 focus:border-foreground/20"
+            }`}
           />
           <select
             id={`${uid}-kind`}

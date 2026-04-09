@@ -13,6 +13,7 @@ import type { Question } from "@/lib/question";
 import RulesSection from "@/app/components/RulesSection";
 import { PropertyEditorSkeleton } from "@/app/components/Skeleton";
 import { ConfirmDialog } from "@/app/components/ConfirmDialog";
+import { RuleProposalModal, type Proposal } from "@/app/components/RuleProposalModal";
 import { validateLandlordFieldId, validateLandlordFieldLabel, FIELD_VALUE_KINDS, type FieldValueKind, normalizeEnumOptions, validateEnumOptions } from "@/lib/landlord-field";
 
 const TABS = ["Fields", "Questions", "Rules", "Links", "AI Behavior"] as const;
@@ -40,52 +41,137 @@ function migrateRules(rawRules: any[]): LandlordRule[] {
 
 // ─── Field Editor ───────────────────────────────────────────────────
 
+function labelToFieldId(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .slice(0, 40);
+}
+
 function FieldEditor({
   field,
   onChange,
   onDelete,
 }: {
-  field: LandlordField;
+  field: LandlordField & { _isNew?: boolean };
   onChange: (f: LandlordField) => void;
   onDelete: () => void;
 }) {
+  const isLocked = !field._isNew;
+
+  function handleLabelChange(newLabel: string) {
+    const updated = { ...field, label: newLabel };
+    if (!isLocked) {
+      const prevAutoId = labelToFieldId(field.label || "");
+      if (!field.id || field.id === prevAutoId) {
+         updated.id = labelToFieldId(newLabel);
+      }
+    }
+    onChange(updated);
+  }
+
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-foreground/10 bg-background p-4 shadow-sm">
-      <div className="flex flex-1 flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={field.id}
-          onChange={(e) => onChange({ ...field, id: e.target.value.replace(/[^a-z0-9_]/g, "") })}
-          placeholder="field_id"
-          className="w-32 rounded-lg border border-foreground/10 bg-[#f7f9f8] px-3 py-2 text-xs font-mono text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:bg-white focus:outline-none"
-        />
-        <input
-          type="text"
-          value={field.label}
-          onChange={(e) => onChange({ ...field, label: e.target.value })}
-          placeholder="Label (e.g. Number of adults)"
-          className="flex-1 min-w-[150px] rounded-lg border border-foreground/10 bg-[#f7f9f8] px-3 py-2 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:bg-white focus:outline-none"
-        />
-        <select
-          value={field.value_kind}
-          onChange={(e) => onChange({ ...field, value_kind: e.target.value as FieldValueKind })}
-          className="w-28 rounded-lg border border-foreground/10 bg-background px-3 py-2 text-sm text-foreground focus:border-foreground/25 focus:outline-none"
+    <div className="flex flex-col gap-3 rounded-xl border border-foreground/10 bg-background p-4 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          <input
+            type="text"
+            value={field.id}
+            readOnly={isLocked}
+            onChange={(e) => {
+              if (!isLocked) onChange({ ...field, id: e.target.value.replace(/[^a-z0-9_]/g, "") })
+            }}
+            placeholder="field_id"
+            title={isLocked ? "Field ID is locked to prevent breaking existing rules." : "Field ID (used in rules)"}
+            className={`w-32 rounded-lg border px-3 py-2 text-xs font-mono focus:outline-none ${
+              isLocked
+                ? "bg-foreground/5 border-transparent text-foreground/50 cursor-not-allowed"
+                : "bg-[#f7f9f8] border-foreground/10 text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:bg-white"
+            }`}
+          />
+          <input
+            type="text"
+            value={field.label}
+            onChange={(e) => handleLabelChange(e.target.value)}
+            placeholder="Label (e.g. Number of adults)"
+            className="flex-1 min-w-[150px] rounded-lg border border-foreground/10 bg-[#f7f9f8] px-3 py-2 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:bg-white focus:outline-none"
+          />
+          <select
+            value={field.value_kind}
+            onChange={(e) => {
+              const k = e.target.value as FieldValueKind;
+              const next = { ...field, value_kind: k };
+              if (k === "enum") {
+                next.options = field.options?.length ? [...field.options] : ["", ""];
+              } else {
+                delete next.options;
+              }
+              onChange(next);
+            }}
+            className="w-28 rounded-lg border border-foreground/10 bg-background px-3 py-2 text-sm text-foreground focus:border-foreground/25 focus:outline-none"
+          >
+            {FIELD_VALUE_KINDS.map((k) => (
+              <option key={k} value={k}>{k}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label="Delete field"
+          className="mt-1 shrink-0 rounded-lg p-1.5 text-red-400/70 hover:bg-red-50 hover:text-red-500 transition-colors"
         >
-          {FIELD_VALUE_KINDS.map((k) => (
-            <option key={k} value={k}>{k}</option>
-          ))}
-        </select>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
-      <button
-        type="button"
-        onClick={onDelete}
-        aria-label="Delete field"
-        className="mt-1 shrink-0 rounded-lg p-1.5 text-red-400/70 hover:bg-red-50 hover:text-red-500 transition-colors"
-      >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-        </svg>
-      </button>
+
+      {field.value_kind === "enum" && (
+        <div className="flex flex-col gap-2 pt-1 border-t border-foreground/5 mt-1">
+          <span className="text-xs text-foreground/50">Answer choices (at least two)</span>
+          <ul className="flex list-none flex-col gap-2 p-0 m-0">
+            {(field.options ?? ["", ""]).map((opt, optIdx) => (
+              <li key={optIdx} className="flex gap-2">
+                <input
+                  type="text"
+                  value={opt}
+                  onChange={(e) => {
+                    const opts = [...(field.options ?? [""])];
+                    opts[optIdx] = e.target.value;
+                    onChange({ ...field, options: opts });
+                  }}
+                  placeholder={`Choice ${optIdx + 1}`}
+                  className="min-w-0 flex-1 rounded-lg border border-foreground/10 bg-[#f7f9f8] px-3 py-2 text-sm text-foreground placeholder:text-foreground/35 focus:border-teal-700/40 focus:bg-white focus:outline-none focus:ring-1 focus:ring-teal-700/20"
+                />
+                <button
+                  type="button"
+                  disabled={(field.options ?? []).length <= 1}
+                  onClick={() => {
+                    const opts = (field.options ?? []).filter((_, j) => j !== optIdx);
+                    onChange({ ...field, options: opts.length ? opts : [""] });
+                  }}
+                  className="shrink-0 rounded-lg px-2 text-xs text-foreground/45 transition-colors hover:text-red-500 disabled:opacity-25"
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={() => onChange({ ...field, options: [...(field.options ?? []), ""] })}
+            className="self-start text-xs text-foreground/50 underline-offset-2 hover:text-foreground/75 hover:underline"
+          >
+            + Add choice
+          </button>
+          {validateEnumOptions(field.options) && (
+            <p className="text-xs text-red-500">{validateEnumOptions(field.options)}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -142,33 +228,46 @@ function QuestionEditor({
         />
 
         {/* Linked fields */}
-        <div className="flex flex-wrap gap-1.5">
-          {fields.map((f) => {
-            const isLinked = question.fieldIds.includes(f.id);
-            return (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => {
-                  const next = isLinked
-                    ? question.fieldIds.filter((fid) => fid !== f.id)
-                    : [...question.fieldIds, f.id];
-                  onChange({ ...question, fieldIds: next });
-                }}
-                className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors border ${
-                  isLinked
-                    ? "border-teal-700/30 bg-teal-50 text-teal-700"
-                    : "border-foreground/10 text-foreground/40 hover:border-foreground/20 hover:text-foreground/60"
-                }`}
-              >
-                {f.label || f.id}
-              </button>
-            );
-          })}
-          {fields.length === 0 && (
-            <span className="text-xs text-foreground/35 italic">Add fields first</span>
-          )}
-        </div>
+        <details className="group" open={question.fieldIds.length === 0}>
+          <summary className="cursor-pointer select-none text-[11px] text-foreground/45 hover:text-foreground/60 transition-colors flex items-center gap-1">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="transition-transform group-open:rotate-90">
+              <path d="M3 1.5l4 3.5-4 3.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Linked fields
+            {question.fieldIds.length > 0 && (
+              <span className="ml-1 rounded bg-teal-50 px-1.5 py-0.5 text-[10px] font-bold text-teal-700">
+                {question.fieldIds.length} selected
+              </span>
+            )}
+          </summary>
+          <div className="mt-2 flex flex-wrap gap-1.5 pl-1.5">
+            {fields.map((f) => {
+              const isLinked = question.fieldIds.includes(f.id);
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => {
+                    const next = isLinked
+                      ? question.fieldIds.filter((fid) => fid !== f.id)
+                      : [...question.fieldIds, f.id];
+                    onChange({ ...question, fieldIds: next });
+                  }}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors border ${
+                    isLinked
+                      ? "border-teal-700/30 bg-teal-50 text-teal-700"
+                      : "border-foreground/10 text-foreground/40 hover:border-foreground/20 hover:text-foreground/60"
+                  }`}
+                >
+                  {f.label || f.id}
+                </button>
+              );
+            })}
+            {fields.length === 0 && (
+              <span className="text-xs text-foreground/35 italic">Add fields first</span>
+            )}
+          </div>
+        </details>
 
         {/* Extract hint (collapsible) */}
         <details className="group">
@@ -224,6 +323,7 @@ export default function PropertySetupPage() {
   const [lastSavedRef] = useState(() => ({ current: "" }));
   const [questionsPrompt, setQuestionsPrompt] = useState("");
   const [rulesPrompt, setRulesPrompt] = useState("");
+  const [ruleProposal, setRuleProposal] = useState<Proposal | null>(null);
 
   const descRef = useRef<HTMLTextAreaElement>(null);
 
@@ -340,7 +440,7 @@ export default function PropertySetupPage() {
       const newQuestions = data.questions ?? [];
 
       if (newFields.length > 0) {
-        setFields((prev) => [...prev, ...newFields]);
+        setFields((prev) => [...prev, ...newFields.map(f => ({ ...f, _isNew: true, _clientId: generateId() }))]);
       }
       if (newQuestions.length > 0) {
         const startOrder = questions.length;
@@ -389,23 +489,50 @@ export default function PropertySetupPage() {
         }),
       });
       const data = (await res.json()) as {
-        rules?: LandlordRule[];
-        missingFields?: { id: string; label: string; value_kind: string }[];
+        newRules?: LandlordRule[];
+        modifiedRules?: LandlordRule[];
+        deletedRuleIds?: string[];
+        missingFields?: LandlordField[];
       };
 
-      // If the AI flagged missing fields, suggest adding them
+      const newRules = migrateRules(data.newRules ?? []);
+      const modifiedRules = migrateRules(data.modifiedRules ?? []);
+      const deletedRuleIds = data.deletedRuleIds ?? [];
+
+      // If the AI flagged missing fields, orchestration needed
       if (data.missingFields && data.missingFields.length > 0) {
-        const names = data.missingFields.map((f) => f.label || f.id).join(", ");
-        toast.warning(`Missing fields needed for these rules: ${names}. Add them in the Fields tab first.`);
+        toast.info("Analyzing missing fields...");
+        const missingFieldsDesc = data.missingFields.map(f => `${f.label || f.id} (type: ${f.value_kind})`).join(", ");
+        const res2 = await fetch("/api/generate-fields", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+             description: `We are building a new rule that requires these new fields: ${missingFieldsDesc}. We must ask questions to collect them. Either modify an existing question to include these fields, or generate new questions.`,
+             existingFields: fields.map((f) => ({ id: f.id, label: f.label })),
+             existingQuestions: questions.map((q) => ({ id: q.id, text: q.text, fieldIds: q.fieldIds })),
+          })
+        });
+        const data2 = await res2.json();
+        
+        setRuleProposal({
+           newRules,
+           modifiedRules,
+           deletedRuleIds,
+           missingFields: data.missingFields,
+           proposedQuestions: data2.questions || []
+        });
+        return;
       }
 
-      const newRules = migrateRules(data.rules ?? []);
-      if (newRules.length === 0) {
-        toast.info("No new rules to add.");
-      } else {
-        setRules((prev) => [...prev, ...newRules]);
-        toast.success(`Added ${newRules.length} rule${newRules.length !== 1 ? "s" : ""}`);
-      }
+      // No missing fields
+      setRuleProposal({
+        newRules,
+        modifiedRules,
+        deletedRuleIds,
+        missingFields: [],
+        proposedQuestions: []
+      });
+
     } catch (err) {
       console.error("[generateRules]", err);
       toast.error("Rule generation failed — please try again");
@@ -414,11 +541,65 @@ export default function PropertySetupPage() {
     }
   }
 
+  function applyProposal() {
+    if (!ruleProposal) return;
+    
+    // Add missing fields
+    if (ruleProposal.missingFields.length > 0) {
+      setFields((prev) => [...prev, ...ruleProposal.missingFields.map(f => ({ ...f, _isNew: true, _clientId: generateId() }) as unknown as LandlordField)]);
+    }
+    
+    // Process proposed questions (update if exists, append if new)
+    if (ruleProposal.proposedQuestions.length > 0) {
+      setQuestions((prev) => {
+        const next = [...prev];
+        const newQs: Question[] = [];
+        for (const pq of ruleProposal.proposedQuestions) {
+          const idx = next.findIndex(q => q.id === pq.id);
+          if (idx >= 0) {
+            next[idx] = { ...next[idx], text: pq.text, fieldIds: Array.from(new Set([...next[idx].fieldIds, ...pq.fieldIds])) };
+          } else {
+            newQs.push(pq);
+          }
+        }
+        if (newQs.length > 0) {
+           const startOrder = next.length;
+           return [...next, ...newQs.map((q, i) => ({ ...q, sort_order: startOrder + i }))];
+        }
+        return next;
+      });
+    }
+    
+    // Add / Update / Delete rules
+    setRules((prev) => {
+      let next = [...prev];
+      if (ruleProposal.deletedRuleIds.length > 0) {
+        next = next.filter(r => !ruleProposal.deletedRuleIds.includes(r.id));
+      }
+      if (ruleProposal.modifiedRules.length > 0) {
+        for (const mod of ruleProposal.modifiedRules) {
+          const idx = next.findIndex(r => r.id === mod.id);
+          if (idx >= 0) {
+            next[idx] = mod;
+          }
+        }
+      }
+      if (ruleProposal.newRules.length > 0) {
+        next = [...next, ...ruleProposal.newRules];
+      }
+      return next;
+    });
+
+    const changesCount = ruleProposal.newRules.length + ruleProposal.modifiedRules.length + ruleProposal.deletedRuleIds.length;
+    toast.success(`Applied ${changesCount} rule change(s)`);
+    setRuleProposal(null);
+  }
+
   // ── Field helpers ──
   function addField() {
     setFields((prev) => [
       ...prev,
-      { id: `field_${generateId()}`, label: "", value_kind: "text" },
+      { id: "", label: "", value_kind: "text", _isNew: true, _clientId: generateId() } as unknown as LandlordField,
     ]);
   }
 
@@ -588,7 +769,12 @@ export default function PropertySetupPage() {
               <button
                 key={tab}
                 type="button"
-                onClick={() => setActiveTab(tab)}
+                onClick={() => {
+                  if (activeTab === "Fields" && tab !== "Fields") {
+                    setFields(prev => prev.filter(f => f.id.trim() !== "" || f.label.trim() !== ""));
+                  }
+                  setActiveTab(tab);
+                }}
                 className={`px-3 py-3 text-sm font-medium transition-colors ${activeTab === tab
                   ? "border-b-2 border-teal-700 text-teal-700"
                   : "text-foreground/45 hover:text-foreground/70"
@@ -613,7 +799,7 @@ export default function PropertySetupPage() {
                 <div className="space-y-2">
                   {fields.map((f, i) => (
                     <FieldEditor
-                      key={f.id + i}
+                      key={(f as any)._clientId || f.id + i}
                       field={f}
                       onChange={(updated) => updateField(i, updated)}
                       onDelete={() => deleteField(i)}
@@ -845,6 +1031,15 @@ export default function PropertySetupPage() {
           </div>
         </section>
       </div>
+
+      <RuleProposalModal
+        open={!!ruleProposal}
+        proposal={ruleProposal}
+        existingRules={rules}
+        existingQuestions={questions}
+        onConfirm={applyProposal}
+        onCancel={() => setRuleProposal(null)}
+      />
     </>
   );
 }

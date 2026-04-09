@@ -92,7 +92,7 @@ export default async function PropertiesPage() {
                     target="_blank"
                     className="rounded-lg border border-black/10 px-3 py-1.5 text-xs font-medium text-[#1a2e2a]/60 transition-colors hover:bg-[#f7f9f8] hover:text-[#1a2e2a]"
                   >
-                    Test chat
+                    Chat
                   </Link>
                   <Link
                     href={`/applicants?property=${p.id}`}
