@@ -391,6 +391,7 @@ export default function PropertySetupPage() {
   ]);
 
   // Flush pending changes on unmount (e.g. client navigation away)
+  // Uses a direct supabase call instead of save() to avoid state updates on an unmounted component.
   useEffect(() => {
     return () => {
       if (savedIndicatorTimerRef.current) {
@@ -398,11 +399,27 @@ export default function PropertySetupPage() {
         savedIndicatorTimerRef.current = null;
       }
       if (!hasLoadedRef.current) return;
-      if (serializedStateRef.current !== lastSavedRef.current) {
-        void saveRef.current();
-      }
+      if (serializedStateRef.current === lastSavedRef.current) return;
+      try {
+        const state = JSON.parse(serializedStateRef.current);
+        void supabase
+          .from("properties")
+          .update({
+            title: (state.title ?? "").trim() || "New Property",
+            description: (state.description ?? "").trim(),
+            fields: state.fields,
+            questions: state.questions,
+            rules: state.rules,
+            links: state.links,
+            ai_instructions: state.aiInstructions,
+            max_fields_per_question: state.maxFieldsPerQuestion,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", id)
+          .then(({ error }) => { if (error) console.error("[unmount-save]", error); });
+      } catch { /* serialization error — skip */ }
     };
-  }, []);
+  }, [id, supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Generate questions with prompt ──
   async function handleGenerateQuestions(prompt: string) {
