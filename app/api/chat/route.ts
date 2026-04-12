@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import type { LandlordField, FieldValueKind } from "@/lib/landlord-field";
-import type { LandlordRule } from "@/lib/landlord-rule";
+import {
+  isFieldVisibilityRule,
+  normalizeRulesList,
+  type LandlordRule,
+} from "@/lib/landlord-rule";
 import type { Question } from "@/lib/question";
 import type { AiInstructions, PropertyLinks } from "@/lib/property";
 import { resolveAiInstructions, DEFAULT_LINKS } from "@/lib/property";
@@ -94,7 +98,7 @@ function isValidExtraction(
 /**
  * Given questions and fields, find the next question to ask.
  * A question is "done" when ALL of its fieldIds have been answered.
- * Also checks visibility rules (ask-rules) on each question's fields.
+ * Also checks field-visibility rules on each question's fields.
  */
 function findNextQuestion(
   questions: Question[],
@@ -109,14 +113,13 @@ function findNextQuestion(
     const allFieldsFilled = q.fieldIds.every((fid) => answers[fid] !== undefined);
     if (allFieldsFilled) continue;
 
-    // Check visibility rules: if any field in the question has an ask-rule,
-    // check if the ask-rule's conditions are met
+    // Field-visibility rules: if a field has them, its question is only active when at least one rule’s conditions match
     const someFieldActive = q.fieldIds.some((fid) => {
-      const askRules = rules.filter(
-        (r) => r.action === "ask" && r.targetFieldId === fid,
+      const visibilityRules = rules.filter(
+        (r) => isFieldVisibilityRule(r) && r.targetFieldId === fid,
       );
-      if (askRules.length === 0) return true; // no ask rules = always active
-      return askRules.some((r) => evaluateRule(r, fields, answers) === true);
+      if (visibilityRules.length === 0) return true;
+      return visibilityRules.some((r) => evaluateRule(r, fields, answers) === true);
     });
 
     if (!someFieldActive) continue;
@@ -192,9 +195,9 @@ function buildSystemPrompt(
 
   // Build rejection rules block
   const rulesBlock =
-    rules.some((r) => r.action === "reject")
+    rules.some((r) => r.kind === "reject")
       ? rules
-          .filter((r) => r.action === "reject")
+          .filter((r) => r.kind === "reject")
           .map((r) => {
             const parts = r.conditions
               .map((c) => {
@@ -330,9 +333,7 @@ export async function POST(req: Request) {
   const questions = Array.isArray(rec.questions)
     ? (rec.questions as Question[])
     : [];
-  const rules = Array.isArray(rec.rules)
-    ? (rec.rules as LandlordRule[])
-    : [];
+  const rules = Array.isArray(rec.rules) ? normalizeRulesList(rec.rules) : [];
   const answers =
     rec.answers && typeof rec.answers === "object"
       ? (rec.answers as Record<string, string>)

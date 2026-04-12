@@ -9,8 +9,10 @@ export type Proposal = {
   newRules: LandlordRule[];
   modifiedRules: LandlordRule[];
   deletedRuleIds: string[];
-  missingFields: LandlordField[];
+  newFields: LandlordField[];
   proposedQuestions: Question[];
+  deletedQuestionIds: string[];
+  visibilityRules: LandlordRule[];
 };
 
 export function RuleProposalModal({
@@ -18,6 +20,7 @@ export function RuleProposalModal({
   proposal,
   existingRules,
   existingQuestions,
+  existingFields,
   onConfirm,
   onCancel,
 }: {
@@ -25,6 +28,7 @@ export function RuleProposalModal({
   proposal: Proposal | null;
   existingRules: LandlordRule[];
   existingQuestions: Question[];
+  existingFields?: LandlordField[];
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -40,7 +44,19 @@ export function RuleProposalModal({
   if (!open || !proposal) return null;
 
   const hasRuleChanges = proposal.newRules.length > 0 || proposal.modifiedRules.length > 0 || proposal.deletedRuleIds.length > 0;
-  const hasStructuralChanges = proposal.missingFields.length > 0 || proposal.proposedQuestions.length > 0;
+  const hasFieldChanges = proposal.newFields.length > 0;
+  const hasQuestionChanges = proposal.proposedQuestions.length > 0 || proposal.deletedQuestionIds.length > 0;
+  const hasVisibilityRules = proposal.visibilityRules.length > 0;
+  const hasChanges = hasRuleChanges || hasFieldChanges || hasQuestionChanges || hasVisibilityRules;
+
+  const fieldLabel = (id: string) => {
+    const f = existingFields?.find((ef) => ef.id === id) ?? proposal.newFields.find((nf) => nf.id === id);
+    return f?.label || id;
+  };
+
+  const deletedQuestions = proposal.deletedQuestionIds
+    .map((id) => existingQuestions.find((q) => q.id === id))
+    .filter((q): q is Question => q != null);
 
   return (
     <dialog
@@ -52,9 +68,11 @@ export function RuleProposalModal({
         <div className="border-b border-black/5 p-6 pb-4">
           <h3 className="text-lg font-semibold text-[#1a2e2a]">Review Proposed Changes</h3>
           <p className="mt-1 text-sm text-[#1a2e2a]/60">
-            {hasStructuralChanges 
-              ? "The AI generated rules that require new fields. Please review the proposed scheme."
-              : "Please review the proposed rule changes."}
+            {hasFieldChanges
+              ? "The AI proposed changes that include new fields. Please review everything below."
+              : hasQuestionChanges && !hasRuleChanges
+                ? "Please review the proposed question changes."
+                : "Please review the proposed changes."}
           </p>
         </div>
 
@@ -70,7 +88,7 @@ export function RuleProposalModal({
                   return (
                     <li key={i} className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm flex items-start gap-2 opacity-70">
                       <span className="font-medium text-red-900/80 min-w-16 line-through">
-                        {r.action === "reject" ? "Reject if:" : "Require:"}
+                        {r.kind === "reject" ? "Reject if:" : "Require:"}
                       </span>
                       <div className="flex flex-col text-red-900/70 line-through">
                         {r.conditions.map((c, idx) => (
@@ -99,7 +117,7 @@ export function RuleProposalModal({
                       {original && (
                         <div className="p-3 text-sm flex items-start gap-2 bg-black/5 opacity-60">
                           <span className="font-medium text-foreground/80 min-w-16 line-through">
-                            {original.action === "reject" ? "Reject if:" : "Require:"}
+                            {original.kind === "reject" ? "Reject if:" : "Require:"}
                           </span>
                           <div className="flex flex-col text-foreground/70 line-through">
                             {original.conditions.map((c, idx) => (
@@ -114,7 +132,7 @@ export function RuleProposalModal({
                       
                       <div className="p-3 text-sm flex items-start gap-2 bg-white">
                         <span className="font-medium text-amber-900 min-w-16">
-                          {rule.action === "reject" ? "Reject if:" : "Require:"}
+                          {rule.kind === "reject" ? "Reject if:" : "Require:"}
                         </span>
                         <div className="flex flex-col text-amber-900/80">
                           {rule.conditions.map((c, idx) => (
@@ -140,7 +158,7 @@ export function RuleProposalModal({
                 {proposal.newRules.map((rule, i) => (
                   <li key={i} className="rounded-lg border border-teal-100 bg-teal-50/30 p-3 text-sm flex items-start gap-2">
                     <span className="font-medium text-teal-900/80 min-w-16">
-                      {rule.action === "reject" ? "Reject if:" : "Require:"}
+                      {rule.kind === "reject" ? "Reject if:" : "Require:"}
                     </span>
                     <div className="flex flex-col text-teal-900/80 font-medium">
                       {rule.conditions.map((c, idx) => (
@@ -156,18 +174,37 @@ export function RuleProposalModal({
             </div>
           )}
 
-          {/* Missing Fields */}
-          {proposal.missingFields.length > 0 && (
+          {/* New Fields */}
+          {proposal.newFields.length > 0 && (
             <div>
               <h4 className="text-xs font-semibold uppercase tracking-wider text-purple-600">Fields to Add</h4>
               <div className="mt-2 flex flex-wrap gap-2">
-                {proposal.missingFields.map((f, i) => (
+                {proposal.newFields.map((f, i) => (
                   <div key={i} className="rounded border border-purple-200 bg-purple-50 px-2 py-1 flex items-center gap-1.5 shadow-sm">
                     <span className="text-xs font-medium text-purple-900">{f.label || f.id}</span>
                     <span className="text-[10px] text-purple-700/60 uppercase tracking-widest bg-purple-100 px-1 rounded">{f.value_kind}</span>
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Deleted Questions */}
+          {deletedQuestions.length > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-red-600">Questions to Remove</h4>
+              <ul className="mt-2 flex flex-col gap-2">
+                {deletedQuestions.map((q, i) => (
+                  <li key={i} className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm opacity-70">
+                    <div className="text-red-900/70 line-through">{q.text}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {q.fieldIds.map((fid) => (
+                        <span key={fid} className="text-[10px] rounded bg-red-100 px-1.5 py-0.5 text-red-800/60 line-through">{fid}</span>
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -210,7 +247,33 @@ export function RuleProposalModal({
             </div>
           )}
 
-          {!hasRuleChanges && !hasStructuralChanges && (
+          {/* Visibility Rules (Conditional Fields) */}
+          {hasVisibilityRules && (
+            <div>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-indigo-600">Conditional Fields</h4>
+              <ul className="mt-2 flex flex-col gap-2">
+                {proposal.visibilityRules.map((rule, i) => (
+                  <li key={i} className="rounded-lg border border-indigo-100 bg-indigo-50/30 p-3 text-sm flex items-start gap-2">
+                    <span className="font-medium text-indigo-900/80 shrink-0">Show</span>
+                    <div className="flex flex-col text-indigo-900/80">
+                      <span className="font-medium">&ldquo;{fieldLabel(rule.targetFieldId!)}&rdquo;</span>
+                      <span className="text-indigo-700/60 text-xs mt-0.5">
+                        only when{" "}
+                        {rule.conditions.map((c, idx) => (
+                          <span key={idx}>
+                            {idx > 0 && <span className="font-bold uppercase text-[10px] mx-1">and</span>}
+                            {fieldLabel(c.fieldId)} {c.operator} {c.value}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!hasChanges && (
             <p className="text-sm text-foreground/50 italic">No meaningful changes were proposed.</p>
           )}
         </div>
@@ -226,7 +289,7 @@ export function RuleProposalModal({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!hasRuleChanges && !hasStructuralChanges}
+            disabled={!hasChanges}
             className="rounded-lg bg-teal-700 px-5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 shadow-sm disabled:opacity-50"
           >
             Accept & Apply

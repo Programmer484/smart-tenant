@@ -6,11 +6,11 @@ import type { LandlordField } from "@/lib/landlord-field";
 import type { LandlordRule } from "@/lib/landlord-rule";
 import { RuleBuilder, generateId, emptyCondition } from "./RuleBuilder";
 
-function buildEmptyRule(fields: LandlordField[], action: "reject" | "require"): LandlordRule & { _key: string } {
+function buildEmptyRule(fields: LandlordField[], ruleKind: "reject" | "require"): LandlordRule & { _key: string } {
   return {
     _key: generateId(),
     id: generateId(),
-    action,
+    kind: ruleKind,
     conditions: [emptyCondition(fields)],
   };
 }
@@ -24,11 +24,11 @@ export default function RulesSection({
   fields: LandlordField[];
   onChange: (rules: LandlordRule[]) => void;
 }) {
-  function RuleList({ action, title, description, badgeColor }: { action: "reject"|"require", title: string, description: string, badgeColor: string }) {
-    const listRules = rules.filter(r => r.action === action);
+  function RuleList({ ruleKind, title, description, badgeColor }: { ruleKind: "reject"|"require", title: string, description: string, badgeColor: string }) {
+    const listRules = rules.filter((r) => r.kind === ruleKind);
 
     function update(nextRows: LandlordRule[]) {
-      const otherRules = rules.filter(r => r.action !== action);
+      const otherRules = rules.filter((r) => r.kind !== ruleKind);
       onChange([...otherRules, ...nextRows]);
     }
 
@@ -70,7 +70,7 @@ export default function RulesSection({
           <p className="text-[13px] text-foreground/50 leading-relaxed mt-0.5">
             {description}
           </p>
-          {action === "require" && listRules.length > 1 && (
+          {ruleKind === "require" && listRules.length > 1 && (
             <p className="text-[11px] text-foreground/35 mt-1">
               Applicant must match at least one profile below.
             </p>
@@ -81,7 +81,7 @@ export default function RulesSection({
           <div className="flex flex-col gap-1">
             {listRules.map((rule, i) => (
               <div key={rule.id}>
-                {i > 0 && action === "require" && (
+                {i > 0 && ruleKind === "require" && (
                   <div className="flex items-center gap-3 my-2">
                     <div className="h-px flex-1 bg-teal-700/15" />
                     <span className="px-2 py-0.5 rounded-full bg-teal-50 text-[10px] font-bold uppercase tracking-wider text-teal-700/60 border border-teal-700/10">or</span>
@@ -97,7 +97,7 @@ export default function RulesSection({
                   onDelete={() => handleDelete(i)}
                   onMoveUp={() => handleMoveUp(i)}
                   onMoveDown={() => handleMoveDown(i)}
-                  labelOverride={action === "require" ? "Accept applicant if:" : undefined}
+                  labelOverride={ruleKind === "require" ? "Accept applicant if:" : undefined}
                 />
               </div>
             ))}
@@ -107,14 +107,14 @@ export default function RulesSection({
         <button
           type="button"
           onClick={() => {
-            const nr = buildEmptyRule(fields, action);
-            const plainRow = { id: nr.id, action: nr.action, conditions: nr.conditions };
+            const nr = buildEmptyRule(fields, ruleKind);
+            const plainRow = { id: nr.id, kind: nr.kind, conditions: nr.conditions };
             update([...listRules, plainRow]);
           }}
           className="self-start flex items-center gap-1.5 rounded-lg border border-dashed border-foreground/20 px-4 py-2 text-sm text-foreground/50 transition-colors hover:border-foreground/40 hover:text-foreground/70"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-          {action === "reject" ? "Add rejection rule" : "Add acceptance profile"}
+          {ruleKind === "reject" ? "Add rejection rule" : "Add acceptance profile"}
         </button>
       </div>
     );
@@ -123,14 +123,14 @@ export default function RulesSection({
   return (
     <section className="flex flex-col gap-10">
       <RuleList
-        action="require"
+        ruleKind="require"
         title="Acceptance Profiles"
         description="Stack 'Accept' profiles to allow complex applicant combinations. If you define any profiles, applicants MUST match at least one of them."
         badgeColor="bg-teal-100 text-teal-800"
       />
       <div className="border-t border-foreground/10" />
       <RuleList
-        action="reject"
+        ruleKind="reject"
         title="Automatic Rejections (Red Flags)"
         description="Catch-all rejections that trump everything else. If an applicant matches any of these, they are instantly rejected."
         badgeColor="bg-red-100 text-red-800"

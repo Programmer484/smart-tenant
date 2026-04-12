@@ -7,7 +7,7 @@ import { ConfirmDialog } from "@/app/components/ConfirmDialog";
 import type { PropertyRecord, PropertyLinks, AiInstructions } from "@/lib/property";
 import { resolveAiInstructions, DEFAULT_LINKS } from "@/lib/property";
 import type { LandlordField } from "@/lib/landlord-field";
-import type { LandlordRule } from "@/lib/landlord-rule";
+import { normalizeRulesList, type LandlordRule } from "@/lib/landlord-rule";
 import type { Question } from "@/lib/question";
 
 type Role = "assistant" | "user";
@@ -157,7 +157,7 @@ export default function ChatPage() {
         description: p.description,
         fields: (p.fields as LandlordField[]) ?? [],
         questions: (p.questions as Question[]) ?? [],
-        rules: (p.rules as LandlordRule[]) ?? [],
+        rules: normalizeRulesList(p.rules),
         links: { ...DEFAULT_LINKS, ...(p.links as Partial<PropertyLinks>) },
         aiInstructions: resolveAiInstructions(p.ai_instructions),
       };

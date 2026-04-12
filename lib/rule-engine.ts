@@ -103,14 +103,14 @@ export function evaluateRules(
   const violations: RuleViolation[] = [];
 
   for (const rule of rules) {
-    if (rule.action !== "reject") continue;
+    if (rule.kind !== "reject") continue;
     const isMet = evaluateRule(rule, fields, answers);
     if (isMet === true) {
       violations.push({ rule });
     }
   }
 
-  const requireRules = rules.filter(r => r.action === "require");
+  const requireRules = rules.filter((r) => r.kind === "require");
   if (requireRules.length > 0) {
     let someMet = false;
     let someUnknown = false;
@@ -132,7 +132,7 @@ export function evaluateRules(
       }).join(" AND ")).join(" OR ");
 
       violations.push({
-        rule: { id: "require_failed", action: "require", conditions: [] },
+        rule: { id: "require_failed", kind: "require", conditions: [] },
         message: `Did not meet any allowed profile. Allowed profiles: ${p}`
       });
     }

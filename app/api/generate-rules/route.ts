@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { LandlordField } from "@/lib/landlord-field";
 import {
   type LandlordRule,
+  normalizeRulesList,
   OPERATORS_BY_KIND,
   validateRule,
 } from "@/lib/landlord-rule";
@@ -52,20 +53,20 @@ Return ONLY a valid JSON object — no explanation, no markdown, no code fences:
   "newRules": [...],
   "modifiedRules": [...],
   "deletedRuleIds": ["id1", "id2"],
-  "missingFields": [...]
+  "newFields": [...]
 }
 
 "newRules": array of new rule objects. Each must have:
-  - "action": either "reject" or "require"
+  - "kind": either "reject" or "require"
   - "conditions": an array of condition objects, each with "fieldId", "operator", "value"
 
 "modifiedRules": array of updated rule objects. If the user asks to change an EXISTING RULE, return it here.
   - MUST include the original "id" from the EXISTING RULES list.
-  - MUST include the updated "action" and "conditions" arrays.
+  - MUST include the updated "kind" and "conditions" arrays.
 
 "deletedRuleIds": array of string IDs of EXISTING RULES to completely remove, if requested.
 
-"missingFields": array of fields you NEED for the rules but which are NOT in the available fields list below.
+"newFields": array of fields you NEED for the rules but which are NOT in the available fields list below.
   First, define the most natural human-facing label. Then, derive a concise, descriptive snake_case ID from that label.
   Each: { "id": "snake_case_id", "label": "Human-readable label", "value_kind": "text|number|boolean|date|enum" }
   ONLY include missing fields. If all needed fields exist, return an empty array.
@@ -94,8 +95,9 @@ function parseGeneratedRule(
   if (typeof v !== "object" || v === null) return null;
   const r = v as Record<string, unknown>;
 
-  const action = r.action;
-  if (action !== "reject" && action !== "require") return null;
+  const kindRaw = r.kind ?? r.action;
+  if (kindRaw !== "reject" && kindRaw !== "require") return null;
+  const kind = kindRaw as LandlordRule["kind"];
 
   if (Array.isArray(r.conditions)) {
     const conditions = r.conditions
@@ -108,7 +110,7 @@ function parseGeneratedRule(
 
     if (conditions.length === 0) return null;
 
-    const rule: LandlordRule = { id: typeof r.id === "string" ? r.id : generateId(), action, conditions };
+    const rule: LandlordRule = { id: typeof r.id === "string" ? r.id : generateId(), kind, conditions };
     // Only validate against existing fields
     if (!allowMissingFields && validateRule(rule, fields) !== null) return null;
     return rule;
@@ -117,7 +119,7 @@ function parseGeneratedRule(
   if (typeof r.fieldId === "string" && typeof r.operator === "string" && r.value != null) {
     const rule: LandlordRule = {
       id: typeof r.id === "string" ? r.id : generateId(),
-      action,
+      kind,
       conditions: [{
         id: generateId(),
         fieldId: r.fieldId,
@@ -161,7 +163,9 @@ export async function POST(req: Request) {
   }
   const fields = rec.fields as LandlordField[];
 
-  const existingRules: LandlordRule[] = Array.isArray(rec.existingRules) ? rec.existingRules as LandlordRule[] : [];
+  const existingRules: LandlordRule[] = Array.isArray(rec.existingRules)
+    ? normalizeRulesList(rec.existingRules)
+    : [];
 
   try {
     const response = await callClaude(key, {
@@ -193,8 +197,9 @@ export async function POST(req: Request) {
       modifiedRulesArray = Array.isArray(obj.modifiedRules) ? obj.modifiedRules : [];
       deletedRuleIds = Array.isArray(obj.deletedRuleIds) ? obj.deletedRuleIds.filter((x): x is string => typeof x === "string") : [];
       
-      if (Array.isArray(obj.missingFields)) {
-        missingFields = (obj.missingFields as unknown[]).filter(
+      const rawNewFields = Array.isArray(obj.newFields) ? obj.newFields : (Array.isArray(obj.missingFields) ? obj.missingFields : []);
+      if (rawNewFields.length > 0) {
+        missingFields = (rawNewFields as unknown[]).filter(
           (x): x is { id: string; label: string; value_kind: string } =>
             typeof x === "object" && x !== null &&
             typeof (x as any).id === "string" &&
@@ -205,17 +210,67 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "AI response was not valid", raw: cleaned }, { status: 502 });
     }
 
-    // Parse rules — do not strictly drop rules referencing missingFields
-    // We pass allowMissingFields = true, so the frontend can orchestrate adding them
+    // If missing fields were identified, make a second call with augmented field list
+    // so the LLM can reliably generate rules with all fields available
+    if (missingFields.length > 0) {
+      const augmentedFields: LandlordField[] = [
+        ...fields,
+        ...missingFields.map((mf) => ({
+          id: mf.id,
+          label: mf.label,
+          value_kind: mf.value_kind,
+        } as LandlordField)),
+      ];
+
+      const response2 = await callClaude(key, {
+        system: buildSystemPrompt(augmentedFields, existingRules),
+        messages: [{ role: "user", content: description }],
+      });
+
+      const raw2 = extractText(response2);
+      const cleaned2 = stripCodeFences(raw2);
+
+      let parsed2: unknown;
+      try {
+        parsed2 = JSON.parse(cleaned2);
+      } catch {
+        // Fall back to first-call rules if second call fails to parse
+        const newRules = newRulesArray.map((v) => parseGeneratedRule(v, fields, true)).filter((r): r is LandlordRule => r !== null);
+        const modifiedRules = modifiedRulesArray.map((v) => parseGeneratedRule(v, fields, true)).filter((r): r is LandlordRule => r !== null);
+        return NextResponse.json({ newRules, modifiedRules, deletedRuleIds, newFields: missingFields });
+      }
+
+      let newRulesArray2: unknown[] = [];
+      let modifiedRulesArray2: unknown[] = [];
+      let deletedRuleIds2: string[] = deletedRuleIds;
+
+      if (Array.isArray(parsed2)) {
+        newRulesArray2 = parsed2;
+      } else if (typeof parsed2 === "object" && parsed2 !== null) {
+        const obj2 = parsed2 as Record<string, unknown>;
+        newRulesArray2 = Array.isArray(obj2.newRules) ? obj2.newRules : (Array.isArray(obj2.rules) ? obj2.rules : []);
+        modifiedRulesArray2 = Array.isArray(obj2.modifiedRules) ? obj2.modifiedRules : [];
+        if (Array.isArray(obj2.deletedRuleIds)) {
+          deletedRuleIds2 = obj2.deletedRuleIds.filter((x): x is string => typeof x === "string");
+        }
+      }
+
+      const newRules = newRulesArray2.map((v) => parseGeneratedRule(v, augmentedFields, false)).filter((r): r is LandlordRule => r !== null);
+      const modifiedRules = modifiedRulesArray2.map((v) => parseGeneratedRule(v, augmentedFields, false)).filter((r): r is LandlordRule => r !== null);
+
+      return NextResponse.json({ newRules, modifiedRules, deletedRuleIds: deletedRuleIds2, newFields: missingFields });
+    }
+
+    // No missing fields — use first-call results directly
     const newRules = newRulesArray
-      .map((v) => parseGeneratedRule(v, fields, true))
+      .map((v) => parseGeneratedRule(v, fields, false))
       .filter((r): r is LandlordRule => r !== null);
       
     const modifiedRules = modifiedRulesArray
-      .map((v) => parseGeneratedRule(v, fields, true))
+      .map((v) => parseGeneratedRule(v, fields, false))
       .filter((r): r is LandlordRule => r !== null);
 
-    return NextResponse.json({ newRules, modifiedRules, deletedRuleIds, missingFields });
+    return NextResponse.json({ newRules, modifiedRules, deletedRuleIds, newFields: missingFields });
   } catch (err) {
     if (err instanceof ClaudeApiError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

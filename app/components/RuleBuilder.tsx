@@ -5,6 +5,7 @@ import type { LandlordField } from "@/lib/landlord-field";
 import {
   OPERATORS_BY_KIND,
   operatorLabel,
+  isFieldVisibilityRule,
   type LandlordRule,
   type RuleCondition,
   defaultOperatorForKind,
@@ -181,7 +182,7 @@ export function RuleBuilder({
   isLast?: boolean;
   labelOverride?: string;
 }) {
-  const isGlobal = rule.action !== "ask";
+  const isGlobal = !isFieldVisibilityRule(rule);
   const summary = describeRule(rule, fields);
 
   return (
@@ -217,14 +218,14 @@ export function RuleBuilder({
       )}
 
       {/* Conditions */}
-      <div className="flex flex-1 flex-col gap-3">
-        {(labelOverride || rule.action === 'reject') && (
-          <span className="text-sm font-semibold text-foreground/80">
+      <div className="flex flex-1 flex-col gap-2">
+        {(labelOverride || rule.kind === "reject") && (
+          <span className={`font-medium text-foreground/70 ${isGlobal ? "text-sm" : "text-xs"}`}>
             {labelOverride || "Reject applicant if:"}
           </span>
         )}
 
-        <div className="flex flex-col gap-2 pl-1">
+        <div className="flex flex-col gap-2">
           {rule.conditions.map((cond, idx) => (
             <div key={cond.id} className="flex flex-col gap-1">
               {idx > 0 && (
@@ -251,29 +252,26 @@ export function RuleBuilder({
           ))}
         </div>
 
-        {/* Add condition button */}
         <button
           type="button"
           onClick={() => {
-             onChange({ ...rule, conditions: [...rule.conditions, emptyCondition(fields)] });
+            onChange({ ...rule, conditions: [...rule.conditions, emptyCondition(fields)] });
           }}
-          className="self-start flex items-center gap-1 text-xs font-medium text-foreground/45 hover:text-teal-700 transition-colors"
+          className="self-start flex items-center gap-1 text-[11px] text-foreground/35 hover:text-teal-700 transition-colors"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-          Add filter rule
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+          Add condition
         </button>
+      </div>
 
-        </div>
-
-      {/* Delete Rule */}
       <div className="pt-0.5">
         <button
           type="button"
           onClick={onDelete}
           aria-label="Delete rule"
-          className="shrink-0 rounded-lg p-1.5 transition-colors text-red-400/70 hover:bg-red-50 hover:text-red-500"
+          className={`shrink-0 rounded-lg transition-colors text-red-400/60 hover:bg-red-50 hover:text-red-500 ${isGlobal ? "p-1.5" : "p-1"}`}
         >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <svg width={isGlobal ? "16" : "14"} height={isGlobal ? "16" : "14"} viewBox="0 0 16 16" fill="none">
             <path d="M2 4h12M5 4V2.5A1.5 1.5 0 0 1 6.5 1h3A1.5 1.5 0 0 1 11 2.5V4m2 0-.75 9A1.5 1.5 0 0 1 10.75 14.5h-5.5A1.5 1.5 0 0 1 3.75 13L3 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
             <path d="M6.5 7v4M9.5 7v4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
           </svg>
