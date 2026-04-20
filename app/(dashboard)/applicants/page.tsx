@@ -66,6 +66,7 @@ export default function ApplicantsPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [propertyContext, setPropertyContext] = useState<{ id: string; title: string; published: boolean } | null>(null);
+  const [tenantNameLink, setTenantNameLink] = useState("");
 
   const propertyId = typeof window !== "undefined"
     ? new URLSearchParams(window.location.search).get("property")
@@ -107,7 +108,10 @@ export default function ApplicantsPage() {
       toast.error("Publish this property before sharing the applicant chat link.");
       return;
     }
-    const url = `${window.location.origin}/chat/${propertyContext.id}`;
+    let url = `${window.location.origin}/chat/${propertyContext.id}`;
+    if (tenantNameLink.trim()) {
+      url += `?name=${encodeURIComponent(tenantNameLink.trim())}`;
+    }
     await navigator.clipboard.writeText(url);
     toast.success("Chat link copied");
   }
@@ -181,6 +185,13 @@ export default function ApplicantsPage() {
               </span>
             </div>
             <div className="flex items-center gap-3">
+              <input
+                type="text"
+                placeholder="Applicant name (optional)..."
+                value={tenantNameLink}
+                onChange={(e) => setTenantNameLink(e.target.value)}
+                className="h-8 w-44 rounded-lg border border-teal-200/50 bg-white px-3 text-xs placeholder:text-teal-800/30 focus:border-teal-600/40 focus:outline-none focus:ring-2 focus:ring-teal-600/20"
+              />
               <button
                 type="button"
                 onClick={() => void copyChatLink()}

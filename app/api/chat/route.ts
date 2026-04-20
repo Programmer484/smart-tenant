@@ -317,6 +317,43 @@ export async function POST(req: Request) {
   );
   const isPreview = rec.preview === true;
 
+  const applicantName = typeof rec.applicantName === "string" ? rec.applicantName.trim() : null;
+
+  const existingNameField = fields.find((f) => {
+    const idStr = f.id.toLowerCase();
+    const labelStr = (f.label || "").toLowerCase();
+    return idStr.includes("name") || labelStr.includes("name");
+  });
+
+  if (!existingNameField) {
+    fields.unshift({
+      id: "applicant_name",
+      label: "Applicant Name",
+      value_kind: "text",
+    });
+    questions.unshift({
+      id: "q_sys_name",
+      text: "To begin, what is your full legal name?",
+      fieldIds: ["applicant_name"],
+      sort_order: -1
+    });
+  }
+
+  const activeNameFieldId = existingNameField ? existingNameField.id : "applicant_name";
+
+  if (applicantName) {
+    if (!answers[activeNameFieldId]) {
+      answers[activeNameFieldId] = applicantName;
+    }
+
+    if (messages.length > 0 && messages[0].content === "(new conversation — very concisely introduce yourself and ask the first screening question)") {
+      messages[0].content = `(new conversation — very concisely introduce yourself, greet the applicant by their name which is ${applicantName}. Then, ask the first screening question. Do not ask for their name.)`;
+    }
+  } else if (messages.length > 0 && messages[0].content === "(new conversation — very concisely introduce yourself and ask the first screening question)") {
+    // If we didn't get a name, just start normally. The first question will be the name question.
+    messages[0].content = `(new conversation — very concisely introduce yourself, then ask the first screening question.)`;
+  }
+
   if (propertyId) {
     const db = createServiceClient();
     const { data: pubRow, error: pubErr } = await db

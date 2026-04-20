@@ -555,7 +555,7 @@ function QuestionNode({
             <button
               type="button"
               onClick={() => addFollowUp(node.index)}
-              className="flex items-center gap-1 text-teal-700/70 hover:text-teal-700 transition-colors"
+              className="tour-add-followup flex items-center gap-1 text-teal-700/70 hover:text-teal-700 transition-colors"
             >
               <svg width="9" height="9" viewBox="0 0 12 12" fill="none">
                 <path d="M6 2v8M2 6h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -661,6 +661,9 @@ export default function PropertySetupPage() {
 
   const [activeTab, setActiveTab] = useState<Tab>("Questions");
   const [loadingPhase, setLoadingPhase] = useState<null | "questions" | "rules">(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [tenantNameLink, setTenantNameLink] = useState("");
+
   const [saving, setSaving] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1413,7 +1416,10 @@ export default function PropertySetupPage() {
       toast.error("Publish this property before sharing the applicant chat link.");
       return;
     }
-    const url = `${window.location.origin}/chat/${id}`;
+    let url = `${window.location.origin}/chat/${id}`;
+    if (tenantNameLink.trim()) {
+      url += `?name=${encodeURIComponent(tenantNameLink.trim())}`;
+    }
     await navigator.clipboard.writeText(url);
     toast.success("Chat link copied — share it with applicants");
   }
@@ -1511,6 +1517,14 @@ export default function PropertySetupPage() {
           </div>
 
           <div id="tour-publish-btn" className="flex shrink-0 items-center gap-2">
+            <input
+              type="text"
+              placeholder="Applicant name (optional)..."
+              value={tenantNameLink}
+              onChange={(e) => setTenantNameLink(e.target.value)}
+              disabled={!isReady || !publishedAt}
+              className="h-8 w-44 rounded-lg border border-black/10 bg-white px-3 text-xs placeholder:text-black/30 focus:border-teal-600/40 focus:outline-none focus:ring-2 focus:ring-teal-600/20 disabled:cursor-not-allowed disabled:bg-[#f7f9f8]"
+            />
             <button
               type="button"
               onClick={() => void copyShareLink()}
@@ -1762,6 +1776,7 @@ export default function PropertySetupPage() {
                 </div>
 
                 <button
+                  id="tour-add-question"
                   type="button"
                   onClick={addQuestion}
                   className="flex items-center gap-1.5 rounded-lg border border-dashed border-foreground/20 px-4 py-2 text-sm text-foreground/50 transition-colors hover:border-foreground/40 hover:text-foreground/70"

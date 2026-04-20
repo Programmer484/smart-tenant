@@ -140,6 +140,7 @@ RULES:
 - When UPDATING an existing question, return its FULL fieldIds list (existing + new). When ADDING a new question, use a new id starting with "q_".
 - If a question is being REPLACED or MERGED into another, include the old question's id in "deletedQuestionIds".
 - The total fieldIds per question must NOT exceed ${maxFieldsPerQuestion}. If an existing question would exceed this after merging, split: delete the old one and create new questions.
+- CRITICAL: The applicant's name is collected automatically by the system. Do NOT generate any fields or questions asking for the applicant's name, full name, or identity. Skip it completely.
 - CRITICAL: Every field ID in every question's "fieldIds" array MUST appear in EXISTING FIELDS below${strictFieldsMode ? "" : " OR in your \"newFields\" output"}. Do not reference field IDs that are not defined.
 ${strictFieldsMode ? "- CRITICAL RESTRICTION: strictFieldsMode is ENABLED. You are FORBIDDEN from generating ANY new fields. The \"newFields\" array MUST be empty. You must ONLY use the fields provided in EXISTING FIELDS to construct your questions." : ""}
 CONDITIONAL FOLLOW-UPS (parentQuestionId + trigger):

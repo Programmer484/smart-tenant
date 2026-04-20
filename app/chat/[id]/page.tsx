@@ -85,6 +85,12 @@ export default function ChatPage() {
     new URLSearchParams(window.location.search).get("preview") === "1"
   );
 
+  const [applicantName] = useState(() =>
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("name") || null
+      : null
+  );
+
   const [restartDialogOpen, setRestartDialogOpen] = useState(false);
   const [listingUnpublished, setListingUnpublished] = useState(false);
 
@@ -132,6 +138,7 @@ export default function ChatPage() {
           sessionId: sid,
           propertyId: cfg.id,
           preview: isPreview,
+          applicantName,
         }),
       });
       if (res.ok) {
@@ -279,6 +286,7 @@ export default function ChatPage() {
           sessionId,
           propertyId: config.id,
           preview: isPreview,
+          applicantName,
         }),
       });
 

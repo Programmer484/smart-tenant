@@ -59,6 +59,26 @@ export function PropertyWalkthrough({
       skipBeacon: true,
     },
     {
+      target: "#tour-add-question",
+      content: (
+        <div className="text-left space-y-2">
+          <h3 className="font-bold text-teal-900">Manual Questions</h3>
+          <p className="text-sm text-gray-700">Prefer to add one yourself? Click here to add a new top-level question manually.</p>
+        </div>
+      ),
+      skipBeacon: true,
+    },
+    {
+      target: ".tour-add-followup",
+      content: (
+        <div className="text-left space-y-2">
+          <h3 className="font-bold text-teal-900">Follow-ups</h3>
+          <p className="text-sm text-gray-700">To branch the interview, click Add follow-up. Follow-ups only trigger when applicants answer a specific way!</p>
+        </div>
+      ),
+      skipBeacon: true,
+    },
+    {
       target: "#tour-tab-rules",
       content: (
         <div className="text-left space-y-2">
@@ -103,11 +123,10 @@ export function PropertyWalkthrough({
       const nextIndex = index + (action === ACTIONS.PREV ? -1 : 1);
       
       // Before updating step index, handle tab switching
-      if (nextIndex === 3) {
+      if (nextIndex === 3 || nextIndex === 4 || nextIndex === 5) {
         setActiveTab("Questions");
-        // Add a slight delay for react to render the tab before advancing joyride
         setTimeout(() => setStepIndex(nextIndex), 50);
-      } else if (nextIndex === 5) {
+      } else if (nextIndex === 7) {
         setActiveTab("Rules");
         setTimeout(() => setStepIndex(nextIndex), 50);
       } else {
