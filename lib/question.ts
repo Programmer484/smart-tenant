@@ -24,6 +24,6 @@ export type Question = {
   text: string;
   fieldIds: string[];
   sort_order: number;
-  extract_hint?: string;
+
   branches: Branch[];
 };

@@ -98,7 +98,6 @@ Return ONLY a valid JSON object — no explanation, no code fences:
       "id": "q_snake_case",
       "text": "Question to ask the applicant",
       "fieldIds": ["field_id"],
-      "extract_hint": "optional extraction hint",
       "branches": [
         {
           "condition": { "fieldId": "has_pets", "operator": "==", "value": "true" },
@@ -232,7 +231,6 @@ function parseGeneratedQuestion(v: unknown): Question | null {
     text: q.text,
     fieldIds,
     sort_order: 0,
-    extract_hint: typeof q.extract_hint === "string" ? q.extract_hint : undefined,
     branches,
   };
 }

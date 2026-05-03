@@ -217,7 +217,7 @@ function buildSystemPrompt(
           return f ? `${f.id} (${f.value_kind})` : fid;
         })
         .join(", ");
-      nextInstruction = `NEXT QUESTION: Ask exactly this: "${nextQuestion.text}". This question collects fields: [${fieldDetails}].${nextQuestion.extract_hint ? ` Hint: ${nextQuestion.extract_hint}` : ""}`;
+      nextInstruction = `NEXT QUESTION: Ask exactly this: "${nextQuestion.text}". This question collects fields: [${fieldDetails}].`;
     }
   } else {
     nextInstruction =

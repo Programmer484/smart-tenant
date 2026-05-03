@@ -101,7 +101,6 @@ function updateAtPath(
 function buildTree(
   qs: Question[],
   pathPrefix: NavPath,
-  expandedIds: Set<string>,
   focusedPath: NavPath,
   parentIndices: number[],
   startIdx = 0,
@@ -117,15 +116,13 @@ function buildTree(
 
     items.push({ question: q, path, label: computeLabel(myIndices), level: myIndices.length - 1, hasChildren });
 
-    const isOpen = expandedIds.has(q.id) || focusedIds.has(q.id);
-    if (isOpen && hasChildren) {
+    if (focusedIds.has(q.id) && hasChildren) {
       let nextIdx = 0;
       for (const branch of followupBranches) {
         items.push(
           ...buildTree(
             branch.subQuestions,
             [...pathPrefix, { questionId: q.id, branchId: branch.id }],
-            expandedIds,
             focusedPath,
             myIndices,
             nextIdx,
@@ -149,10 +146,10 @@ type OutcomeCfg = {
 };
 
 const OUTCOME_CFG: Record<BranchOutcome, OutcomeCfg> = {
-  continue:  { label: "Continue",       icon: "↓", iconCls: "bg-zinc-100 text-zinc-500",    activeCls: "bg-zinc-50 border-zinc-300 text-zinc-700" },
-  followups: { label: "Add follow-ups", icon: "+", iconCls: "bg-emerald-50 text-emerald-700", activeCls: "bg-emerald-50 border-emerald-300 text-emerald-800" },
-  review:    { label: "Manual review",  icon: "!", iconCls: "bg-amber-50 text-amber-700",    activeCls: "bg-amber-50 border-amber-300 text-amber-800" },
-  reject:    { label: "Reject",         icon: "×", iconCls: "bg-red-50 text-red-700",        activeCls: "bg-red-50 border-red-300 text-red-800" },
+  continue:  { label: "Continue",       icon: "↓", iconCls: "bg-black/5 text-foreground/50",      activeCls: "bg-[#f7f9f8] border-foreground/20 text-foreground/70" },
+  followups: { label: "Add follow-ups", icon: "+", iconCls: "bg-teal-50 text-teal-700",            activeCls: "bg-teal-50 border-teal-300 text-teal-800" },
+  review:    { label: "Manual review",  icon: "!", iconCls: "bg-amber-50 text-amber-700",          activeCls: "bg-amber-50 border-amber-300 text-amber-800" },
+  reject:    { label: "Reject",         icon: "×", iconCls: "bg-red-50 text-red-600",              activeCls: "bg-red-50 border-red-300 text-red-700" },
 };
 
 // ─── Condition editor ─────────────────────────────────────────────────────────
@@ -169,9 +166,11 @@ function ConditionEditor({
   const field = fields.find((f) => f.id === condition.fieldId);
   const ops = field ? (OPERATORS_BY_KIND[field.value_kind] ?? []) : [];
 
+  const selectCls = "rounded border border-foreground/10 bg-white px-2 py-1 text-[11px] text-foreground focus:border-teal-700/40 focus:outline-none";
+
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-[10px] font-medium text-violet-600">when</span>
+      <span className="text-[10px] font-medium text-foreground/40">when</span>
       <select
         value={condition.fieldId}
         onChange={(e) => {
@@ -179,7 +178,7 @@ function ConditionEditor({
           if (!f) return;
           onChange({ fieldId: f.id, operator: defaultOperatorForKind(f.value_kind), value: defaultValueForKind(f.value_kind) });
         }}
-        className="rounded border border-violet-200 bg-white px-2 py-1 font-mono text-[11px] text-zinc-800 focus:border-violet-400 focus:outline-none"
+        className={selectCls}
       >
         {fields.length === 0 && <option value="">— no fields —</option>}
         {fields.map((f) => (
@@ -189,7 +188,7 @@ function ConditionEditor({
       <select
         value={condition.operator}
         onChange={(e) => onChange({ ...condition, operator: e.target.value })}
-        className="rounded border border-violet-200 bg-white px-2 py-1 text-[11px] text-violet-700 focus:border-violet-400 focus:outline-none"
+        className={selectCls}
       >
         {ops.map((op) => <option key={op} value={op}>{op}</option>)}
       </select>
@@ -198,7 +197,7 @@ function ConditionEditor({
         value={condition.value}
         onChange={(e) => onChange({ ...condition, value: e.target.value })}
         placeholder="value"
-        className="w-24 rounded border border-violet-200 bg-white px-2 py-1 font-mono text-[11px] text-zinc-800 focus:border-violet-400 focus:outline-none"
+        className="w-24 rounded border border-foreground/10 bg-white px-2 py-1 font-mono text-[11px] text-foreground focus:border-teal-700/40 focus:outline-none"
       />
     </div>
   );
@@ -216,14 +215,13 @@ export default function FlowEditor({
   onChange: (qs: Question[]) => void;
 }) {
   const [focusedPath, setFocusedPath] = useState<NavPath>([]);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [activeBranchId, setActiveBranchId] = useState<string | null>(null);
   const [fieldPickerOpen, setFieldPickerOpen] = useState(false);
   const [fieldPickerAnchor, setFieldPickerAnchor] = useState<DOMRect | null>(null);
   const fieldPickerBtnRef = useRef<HTMLButtonElement>(null);
 
   const focusedIds = new Set(focusedPath.map((s) => s.questionId));
-  const treeItems = buildTree(questions, [], expandedIds, focusedPath, [], 0);
+  const treeItems = buildTree(questions, [], focusedPath, [], 0);
   const focusedQuestion = getAtPath(questions, focusedPath);
   const currentItem = treeItems.find((t) => pathsEqual(t.path, focusedPath));
   const activeBranch = focusedQuestion?.branches.find((b) => b.id === activeBranchId) ?? null;
@@ -267,6 +265,34 @@ export default function FlowEditor({
     setActiveBranchId(null);
   }
 
+  function deleteQuestion() {
+    if (!focusedQuestion) return;
+    const qid = focusedQuestion.id;
+
+    if (focusedPath.length === 1) {
+      // Top-level question
+      onChange(questions.filter((q) => q.id !== qid).map((q, i) => ({ ...q, sort_order: i })));
+      setFocusedPath([]);
+      setActiveBranchId(null);
+      return;
+    }
+
+    // Sub-question: remove from the parent branch's subQuestions
+    const parentPath = focusedPath.slice(0, -1);
+    const parentStep = parentPath[parentPath.length - 1];
+    const newQs = updateAtPath(questions, parentPath, (parentQ) => ({
+      ...parentQ,
+      branches: parentQ.branches.map((b) =>
+        b.id === parentStep.branchId
+          ? { ...b, subQuestions: b.subQuestions.filter((sq) => sq.id !== qid) }
+          : b,
+      ),
+    }));
+    onChange(newQs);
+    setFocusedPath(parentPath.map((s) => ({ questionId: s.questionId })));
+    setActiveBranchId(parentStep.branchId ?? null);
+  }
+
   function addBranch() {
     if (!focusedQuestion || !fields.length) return;
     const f = fields[0];
@@ -308,12 +334,11 @@ export default function FlowEditor({
 
       {/* ── Left: flow tree ──────────────────────────────────────────────── */}
       <div className="rounded-lg border border-black/8 bg-white p-2">
-        <p className="mb-2 px-2 text-[10px] text-zinc-400">Flow</p>
+        <p className="mb-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-foreground/30">Flow</p>
         <div className="space-y-px">
           {treeItems.map((item) => {
             const isCurrent = pathsEqual(item.path, focusedPath);
-            const isAncestorOpen = focusedIds.has(item.question.id) || expandedIds.has(item.question.id);
-            const showOpen = item.hasChildren && isAncestorOpen;
+            const isOpen = item.hasChildren && focusedIds.has(item.question.id);
             return (
               <div
                 key={item.path.map((s) => s.questionId).join(".")}
@@ -326,29 +351,15 @@ export default function FlowEditor({
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setFocusedPath(item.path); setActiveBranchId(item.question.branches[0]?.id ?? null); } }}
                 className={`flex cursor-pointer items-center gap-1.5 rounded-md py-1 text-xs transition-colors ${
                   isCurrent
-                    ? "bg-violet-50 font-medium text-violet-800"
-                    : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700"
+                    ? "bg-teal-50 font-medium text-teal-800"
+                    : "text-foreground/50 hover:bg-[#f7f9f8] hover:text-foreground/70"
                 }`}
                 style={{ paddingLeft: `${8 + item.level * 16}px`, paddingRight: "8px" }}
               >
-                <span
-                  role="button"
-                  tabIndex={-1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (!item.hasChildren) return;
-                    setExpandedIds((prev) => {
-                      const next = new Set(prev);
-                      next.has(item.question.id) ? next.delete(item.question.id) : next.add(item.question.id);
-                      return next;
-                    });
-                  }}
-                  onKeyDown={() => {}}
-                  className={`w-2.5 shrink-0 text-[9px] ${isCurrent ? "text-violet-400" : "text-zinc-300"}`}
-                >
-                  {item.hasChildren ? (showOpen ? "▾" : "▸") : ""}
+                <span className={`w-2.5 shrink-0 text-[9px] ${isCurrent ? "text-teal-400" : "text-foreground/20"}`}>
+                  {item.hasChildren ? (isOpen ? "▾" : "▸") : ""}
                 </span>
-                <span className={`w-7 shrink-0 font-mono text-[10px] ${isCurrent ? "text-violet-600" : "text-zinc-400"}`}>
+                <span className={`w-7 shrink-0 font-mono text-[10px] ${isCurrent ? "text-teal-600" : "text-foreground/35"}`}>
                   {item.label}
                 </span>
                 <span className="truncate">
@@ -361,18 +372,18 @@ export default function FlowEditor({
         <button
           type="button"
           onClick={addTopLevelQuestion}
-          className="mt-3 px-2 text-[11px] text-blue-600 hover:text-blue-800"
+          className="mt-3 px-2 text-[11px] text-teal-700 hover:text-teal-900"
         >
           + add question
         </button>
       </div>
 
       {/* ── Right: focused editor ─────────────────────────────────────────── */}
-      <div className="flex flex-col rounded-lg border border-black/8 bg-white p-4">
+      <div className="flex min-w-0 flex-col rounded-lg border border-black/8 bg-white p-4">
         {!focusedQuestion ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-zinc-400">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-foreground/40">
             <p className="text-sm">Select a question from the flow</p>
-            <button type="button" onClick={addTopLevelQuestion} className="text-xs text-blue-600 hover:text-blue-800">
+            <button type="button" onClick={addTopLevelQuestion} className="text-xs text-teal-700 hover:text-teal-900">
               + add first question
             </button>
           </div>
@@ -381,68 +392,31 @@ export default function FlowEditor({
 
             {/* Breadcrumb */}
             <div className="flex flex-wrap items-center gap-1.5 border-b border-black/5 pb-3 text-[11px]">
-              <button type="button" onClick={() => { setFocusedPath([]); setActiveBranchId(null); }} className="text-blue-600 hover:text-blue-800">
+              <button type="button" onClick={() => { setFocusedPath([]); setActiveBranchId(null); }} className="text-foreground/45 transition-colors hover:text-foreground">
                 Flow
               </button>
               {ancestors.map((anc) => (
                 <span key={anc.path.map((s) => s.questionId).join(".")} className="flex items-center gap-1.5">
-                  <span className="text-zinc-300">›</span>
+                  <span className="text-foreground/20">›</span>
                   <button
                     type="button"
                     onClick={() => { setFocusedPath(anc.path); setActiveBranchId(anc.question.branches[0]?.id ?? null); }}
-                    className="flex items-center gap-1.5 rounded bg-zinc-100 px-2 py-0.5 text-zinc-600 hover:bg-violet-50 hover:text-violet-800"
+                    className="flex items-center gap-1.5 rounded bg-[#f7f9f8] px-2 py-0.5 text-foreground/60 hover:bg-teal-50 hover:text-teal-800"
                   >
-                    <span className="font-mono text-[10px] text-zinc-400">{anc.label}</span>
+                    <span className="font-mono text-[10px] text-foreground/35">{anc.label}</span>
                     {anc.branch && (
-                      <span className="font-mono text-[10px] text-violet-600">
+                      <span className="font-mono text-[10px] text-teal-600">
                         {anc.branch.condition.fieldId} {anc.branch.condition.operator} {anc.branch.condition.value}
                       </span>
                     )}
                   </button>
                 </span>
               ))}
-              <span className="text-zinc-300">›</span>
-              <span className="rounded bg-zinc-100 px-2 py-0.5 font-mono text-[10px] text-zinc-600">
+              <span className="text-foreground/20">›</span>
+              <span className="rounded bg-[#f7f9f8] px-2 py-0.5 font-mono text-[10px] text-foreground/60">
                 {currentItem?.label}
               </span>
-              {focusedPath.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const parentPath = focusedPath.slice(0, -1).map((s) => ({ questionId: s.questionId }));
-                    const parentQ = getAtPath(questions, parentPath);
-                    setFocusedPath(parentPath);
-                    setActiveBranchId(parentQ?.branches[0]?.id ?? null);
-                  }}
-                  className="ml-auto rounded bg-zinc-100 px-2 py-0.5 text-zinc-500 hover:bg-zinc-200"
-                >
-                  ↑ zoom out
-                </button>
-              )}
             </div>
-
-            {/* Ancestor context */}
-            {ancestors.length > 0 && (
-              <div>
-                <p className="mb-1.5 text-[10px] text-zinc-400">Path so far</p>
-                {ancestors.map((anc) => (
-                  <button
-                    key={anc.path.map((s) => s.questionId).join(".")}
-                    type="button"
-                    onClick={() => { setFocusedPath(anc.path); setActiveBranchId(anc.question.branches[0]?.id ?? null); }}
-                    className="mb-1 flex w-full items-center gap-2 rounded-md bg-zinc-50 px-3 py-2 text-left text-xs text-zinc-600 hover:bg-violet-50 hover:text-violet-800"
-                  >
-                    <span className="w-8 shrink-0 font-mono text-[10px] text-zinc-400">{anc.label}</span>
-                    <span className="flex-1 truncate">{anc.question.text || "(untitled)"}</span>
-                    {anc.branch && (
-                      <span className="shrink-0 rounded bg-violet-50 px-1.5 py-0.5 font-mono text-[10px] text-violet-700">
-                        {anc.branch.condition.fieldId} {anc.branch.condition.operator} {anc.branch.condition.value}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
 
             {/* Question card */}
             <div className="rounded-lg border border-black/8 p-4">
@@ -453,12 +427,12 @@ export default function FlowEditor({
                 value={focusedQuestion.text}
                 onChange={(e) => mutate((q) => ({ ...q, text: e.target.value }))}
                 placeholder="Question text…"
-                className="mb-3 w-full rounded-lg border border-black/8 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-violet-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-violet-200"
+                className="mb-4 w-full rounded-lg border border-foreground/10 bg-[#f7f9f8] px-3 py-2.5 text-sm text-foreground placeholder:text-foreground/30 focus:border-teal-700/40 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-700/20"
               />
 
               {/* Linked fields */}
-              <div className="mb-4">
-                <p className="mb-1.5 text-[10px] text-zinc-400">Linked fields</p>
+              <div className="mb-5">
+                <p className="mb-1.5 text-[10px] font-medium text-foreground/40">Linked fields</p>
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     ref={fieldPickerBtnRef}
@@ -468,7 +442,7 @@ export default function FlowEditor({
                       setFieldPickerOpen(true);
                     }}
                     disabled={fields.length === 0}
-                    className="rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-1.5 text-left text-[11px] font-medium text-emerald-900 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded-lg border border-teal-700/25 bg-teal-50/50 px-3 py-1.5 text-left text-[11px] font-medium text-teal-800 transition-colors hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {fields.length === 0
                       ? "Add fields in the Fields tab first"
@@ -484,7 +458,7 @@ export default function FlowEditor({
                           <span
                             key={fid}
                             title={fid}
-                            className="rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-800"
+                            className="rounded-full border border-teal-200 bg-teal-50 px-2.5 py-0.5 text-[11px] font-medium text-teal-800"
                           >
                             {f?.label || f?.id || fid}
                           </span>
@@ -505,7 +479,7 @@ export default function FlowEditor({
               </div>
 
               {/* Branch tabs */}
-              <p className="mb-1.5 text-[10px] text-zinc-400">Branches</p>
+              <p className="mb-1.5 text-[10px] font-medium text-foreground/40">Branches</p>
               <div className="flex flex-wrap gap-1">
                 {focusedQuestion.branches.map((branch) => {
                   const cfg = OUTCOME_CFG[branch.outcome];
@@ -517,8 +491,8 @@ export default function FlowEditor({
                       onClick={() => setActiveBranchId(branch.id)}
                       className={`flex items-center gap-1.5 rounded-t-md border border-b-0 px-3 py-1.5 text-[11px] transition-colors ${
                         isActive
-                          ? "border-violet-300 bg-violet-50 text-violet-800"
-                          : "border-black/8 bg-zinc-50 text-zinc-500 hover:bg-zinc-100"
+                          ? "border-teal-200 bg-teal-50/60 text-teal-800"
+                          : "border-black/8 bg-[#f7f9f8] text-foreground/50 hover:bg-white hover:text-foreground/70"
                       }`}
                     >
                       <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${cfg.iconCls}`}>
@@ -534,7 +508,7 @@ export default function FlowEditor({
                   type="button"
                   onClick={addBranch}
                   disabled={fields.length === 0}
-                  className="rounded-t-md border border-b-0 border-dashed border-zinc-300 px-3 py-1.5 text-[11px] text-zinc-400 hover:text-zinc-600 disabled:opacity-40"
+                  className="rounded-t-md border border-b-0 border-dashed border-foreground/15 px-3 py-1.5 text-[11px] text-foreground/35 hover:text-foreground/60 disabled:opacity-40"
                 >
                   + add branch
                 </button>
@@ -542,9 +516,9 @@ export default function FlowEditor({
 
               {/* Active branch body */}
               {activeBranch ? (
-                <div className="rounded-b-lg rounded-tr-lg border border-violet-200 bg-violet-50/30 p-3">
+                <div className="rounded-b-lg rounded-tr-lg border border-black/8 bg-[#f7f9f8] p-3">
                   {/* Condition editor */}
-                  <div className="mb-3 border-b border-violet-100 pb-3">
+                  <div className="mb-3 border-b border-black/5 pb-3">
                     <ConditionEditor
                       condition={activeBranch.condition}
                       fields={fields}
@@ -554,7 +528,7 @@ export default function FlowEditor({
 
                   {/* Outcome picker */}
                   <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <span className="w-14 shrink-0 text-[10px] text-zinc-400">Outcome</span>
+                    <span className="w-14 shrink-0 text-[10px] text-foreground/40">Outcome</span>
                     <div className="flex flex-wrap gap-1.5">
                       {(Object.entries(OUTCOME_CFG) as [BranchOutcome, OutcomeCfg][]).map(([outcome, cfg]) => {
                         const isActive = activeBranch.outcome === outcome;
@@ -572,7 +546,7 @@ export default function FlowEditor({
                             className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
                               isActive
                                 ? cfg.activeCls
-                                : "border-black/8 bg-white text-zinc-500 hover:bg-zinc-50"
+                                : "border-foreground/10 bg-white text-foreground/50 hover:bg-[#f7f9f8]"
                             }`}
                           >
                             <span className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${cfg.iconCls}`}>
@@ -592,19 +566,19 @@ export default function FlowEditor({
                         const sqItem = treeItems.find((t) => t.question.id === sq.id);
                         return (
                           <div key={sq.id} className="flex items-center gap-2 rounded-md border border-black/8 bg-white px-3 py-2">
-                            <span className="w-8 shrink-0 font-mono text-[10px] text-violet-600">
+                            <span className="w-8 shrink-0 font-mono text-[10px] text-teal-600">
                               {sqItem?.label ?? "—"}
                             </span>
-                            <span className="flex-1 truncate text-xs text-zinc-700">
-                              {sq.text || <em className="text-zinc-400">untitled</em>}
+                            <span className="flex-1 truncate text-xs text-foreground/70">
+                              {sq.text || <em className="text-foreground/35">untitled</em>}
                             </span>
-                            <span className="shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500">
+                            <span className="shrink-0 rounded bg-black/5 px-1.5 py-0.5 text-[10px] text-foreground/40">
                               {sq.fieldIds.length} field{sq.fieldIds.length !== 1 ? "s" : ""}
                             </span>
                             <button
                               type="button"
                               onClick={() => openSubQuestion(activeBranch.id, sq.id)}
-                              className="shrink-0 text-[10px] text-blue-600 hover:text-blue-800"
+                              className="shrink-0 text-[10px] text-teal-700 hover:text-teal-900"
                             >
                               open ↗
                             </button>
@@ -614,7 +588,7 @@ export default function FlowEditor({
                       <button
                         type="button"
                         onClick={() => addSubQuestion(activeBranch.id)}
-                        className="text-[11px] text-blue-600 hover:text-blue-800"
+                        className="text-[11px] text-teal-700 hover:text-teal-900"
                       >
                         + add follow-up question
                       </button>
@@ -622,7 +596,7 @@ export default function FlowEditor({
                   )}
 
                   {/* Delete branch */}
-                  <div className="mt-3 border-t border-violet-100 pt-2.5">
+                  <div className="mt-3 border-t border-black/5 pt-2.5">
                     <button
                       type="button"
                       onClick={() => deleteBranch(activeBranch.id)}
@@ -633,8 +607,8 @@ export default function FlowEditor({
                   </div>
                 </div>
               ) : (
-                <div className="rounded-b-lg rounded-tr-lg border border-dashed border-zinc-200 p-3">
-                  <p className="text-[11px] italic text-zinc-400">
+                <div className="rounded-b-lg rounded-tr-lg border border-dashed border-foreground/10 p-3">
+                  <p className="text-[11px] italic text-foreground/35">
                     {focusedQuestion.branches.length === 0
                       ? "No branches — always continues to the next question."
                       : "Select a branch above to edit it."}
@@ -643,25 +617,21 @@ export default function FlowEditor({
               )}
 
               {focusedQuestion.branches.length > 0 && (
-                <p className="mt-2 text-[11px] italic text-zinc-400">
+                <p className="mt-2 text-[11px] italic text-foreground/35">
                   Default: continue if no branch matches.
                 </p>
               )}
             </div>
 
-            {/* Extract hint */}
-            <details className="group">
-              <summary className="cursor-pointer text-[11px] text-zinc-400 transition-colors hover:text-zinc-600">
-                Extraction hint (optional)
-              </summary>
-              <input
-                type="text"
-                value={focusedQuestion.extract_hint ?? ""}
-                onChange={(e) => mutate((q) => ({ ...q, extract_hint: e.target.value || undefined }))}
-                placeholder="e.g. If they say 'a couple', extract num_adults=2"
-                className="mt-1.5 w-full rounded-lg border border-black/8 bg-zinc-50 px-3 py-2 text-xs text-zinc-800 placeholder:text-zinc-400 focus:border-violet-300 focus:outline-none"
-              />
-            </details>
+            <div className="border-t border-black/5 pt-2">
+              <button
+                type="button"
+                onClick={deleteQuestion}
+                className="text-[11px] text-red-500 hover:text-red-700"
+              >
+                Delete question
+              </button>
+            </div>
 
           </div>
         )}

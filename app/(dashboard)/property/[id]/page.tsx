@@ -423,7 +423,7 @@ export default function PropertySetupPage() {
         for (const pq of ruleProposal.proposedQuestions) {
           const idx = next.findIndex((q) => q.id === pq.id);
           if (idx >= 0) {
-            next[idx] = { ...next[idx], text: pq.text, fieldIds: pq.fieldIds, extract_hint: pq.extract_hint };
+            next[idx] = { ...next[idx], text: pq.text, fieldIds: pq.fieldIds };
           } else {
             newQs.push({ ...pq, branches: pq.branches ?? [] });
           }
